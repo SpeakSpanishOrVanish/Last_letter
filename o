@@ -1,0 +1,144 @@
+-- Word Suggestion Script for Delta Roblox
+-- Provides word suggestions based on typed letters
+
+local wordDictionary = {
+    -- Single letter A words
+    ["a"] = {"able", "about", "above", "accept", "across", "act", "action", "actually", "add", "address", "again", "against", "age", "agency", "agent", "ago", "agree", "ahead", "air", "all", "allow", "almost", "alone", "along"},
+    
+    -- B words
+    ["b"] = {"back", "bad", "ball", "bank", "base", "be", "beat", "beautiful", "because", "become", "bed", "before", "begin", "behavior", "behind", "believe", "benefit", "best", "better", "between", "big", "bill", "black", "blood", "blue"},
+    
+    -- IN prefix words
+    ["in"] = {"inside", "into", "input", "index", "indoor", "income", "indeed", "include", "increase", "instead", "inform", "injury", "inner", "insect", "insert", "inspect", "install", "instant", "insult", "intact", "intent", "invite", "invent", "invest", "invade"},
+    
+    -- C words
+    ["c"] = {"can", "call", "come", "could", "case", "car", "card", "care", "carry", "catch", "cause", "change", "check", "child", "city", "claim", "class", "clear", "close", "coach", "code", "cold", "color", "come", "common"},
+    
+    -- D words
+    ["d"] = {"day", "do", "down", "data", "deal", "dear", "death", "debate", "decade", "decide", "deep", "defense", "degree", "design", "desk", "detail", "develop", "device", "die", "different", "difficult", "dinner", "direct", "discuss", "disease"},
+    
+    -- E words
+    ["e"] = {"each", "early", "earth", "east", "easy", "eat", "edge", "effect", "effort", "eight", "either", "else", "end", "energy", "enjoy", "enough", "enter", "entire", "entry", "equal", "error", "escape", "especially", "event", "ever"},
+    
+    -- Add more prefixes as needed...
+    ["ex"] = {"example", "exist", "exit", "extra", "exact", "exam", "excite", "excuse", "expect", "expert", "explain", "express", "extend", "extra", "extreme", "excel", "except", "exchange", "excuse", "exercise", "exhibit", "exile", "expand", "expire", "export"},
+    
+    ["un"] = {"under", "until", "uncle", "unit", "unity", "unique", "unite", "universal", "unknown", "unless", "unlike", "unlock", "unpaid", "unreal", "unsafe", "untie", "untrue", "unused", "unveil", "unwell", "unwrap", "unzip", "unable", "unfair", "unfold"},
+    
+    ["re"] = {"read", "real", "reason", "receive", "record", "red", "reduce", "refer", "reflect", "region", "relate", "relax", "release", "remain", "remember", "remove", "repair", "repeat", "replace", "reply", "report", "require", "research", "respect", "result"},
+    
+    ["pr"] = {"practice", "prepare", "present", "press", "prevent", "price", "print", "private", "probably", "problem", "process", "produce", "product", "program", "project", "proper", "protect", "prove", "provide", "public", "pull", "purpose", "push", "put"},
+}
+
+-- Get suggestions based on input
+local function getWordSuggestions(input)
+    local suggestions = {}
+    
+    -- Convert input to lowercase for matching
+    local lowerInput = string.lower(input)
+    
+    -- Check if we have suggestions for this exact prefix
+    if wordDictionary[lowerInput] then
+        suggestions = wordDictionary[lowerInput]
+    else
+        -- Try to find matching prefixes
+        for prefix, wordList in pairs(wordDictionary) do
+            if string.sub(lowerInput, 1, string.len(prefix)) == prefix then
+                -- Filter words that start with the input
+                for _, word in ipairs(wordList) do
+                    if string.sub(word, 1, string.len(lowerInput)) == lowerInput then
+                        table.insert(suggestions, word)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Limit to 20-25 suggestions
+    if #suggestions > 25 then
+        local limited = {}
+        for i = 1, 25 do
+            table.insert(limited, suggestions[i])
+        end
+        suggestions = limited
+    end
+    
+    return suggestions
+end
+
+-- Main function to handle typing
+local function onTextChanged(inputText)
+    if inputText == "" then
+        return -- Don't show suggestions for empty input
+    end
+    
+    -- Get suggestions based on input
+    local suggestions = getWordSuggestions(inputText)
+    
+    if #suggestions > 0 then
+        print(string.rep("-", 40))
+        print(string.format("Suggestions for '%s':", inputText))
+        print(string.rep("-", 40))
+        
+        -- Display suggestions in a formatted way
+        for i, word in ipairs(suggestions) do
+            print(string.format("%2d. %s", i, word))
+        end
+        
+        print(string.rep("-", 40))
+        print(string.format("Total: %d suggestions", #suggestions))
+        print(string.rep("-", 40))
+    else
+        print(string.format("No suggestions found for '%s'", inputText))
+    end
+end
+
+-- UI Setup for Delta (if running in Roblox Studio)
+local function setupUI()
+    if game:GetService("RunService"):IsStudio() then
+        -- Create a simple text box for testing in Studio
+        local screenGui = Instance.new("ScreenGui")
+        local textBox = Instance.new("TextBox")
+        
+        screenGui.Name = "WordSuggestionsUI"
+        screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+        
+        textBox.Name = "SuggestionBox"
+        textBox.Size = UDim2.new(0, 300, 0, 50)
+        textBox.Position = UDim2.new(0.5, -150, 0, 20)
+        textBox.PlaceholderText = "Type letters for word suggestions..."
+        textBox.ClearTextOnFocus = false
+        textBox.Parent = screenGui
+        
+        -- Connect the text changed event
+        textBox:GetPropertyChangedSignal("Text"):Connect(function()
+            onTextChanged(textBox.Text)
+        end)
+        
+        print("Word Suggestion UI created! Start typing in the text box.")
+    end
+end
+
+-- Initialize the system
+setupUI()
+
+-- Export functions for external use
+local WordSuggestionModule = {
+    getSuggestions = getWordSuggestions,
+    onTextChanged = onTextChanged,
+    addCustomWords = function(prefix, words)
+        if not wordDictionary[prefix] then
+            wordDictionary[prefix] = {}
+        end
+        for _, word in ipairs(words) do
+            table.insert(wordDictionary[prefix], word)
+        end
+    end
+}
+
+-- For immediate use in chat or command line
+print("Word Suggestion Script Loaded!")
+print("Type: onTextChanged('yourtext') to get suggestions")
+print("Example: onTextChanged('in') or onTextChanged('a')")
+
+return WordSuggestionModule
