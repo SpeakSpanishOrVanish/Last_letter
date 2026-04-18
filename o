@@ -1,410 +1,334 @@
--- Perfect Auto Aim Script for Duels: Murderers vs Sheriffs
--- Uses the exact remote events you found
+-- One-Shot Aimbot for Duels: Murderers vs Sheriffs (Mobile Friendly)
+-- Small square button, persistent through respawns
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local mouse = player:GetMouse()
 
--- Create GUI
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "PerfectAutoAimGUI"
-ScreenGui.Parent = player:WaitForChild("PlayerGui")
+-- Settings
+local cooldownTime = 2.5
+local lastShotTime = 0
+local canShoot = true
 
-local Frame = Instance.new("Frame")
-Frame.Size = UDim2.new(0, 140, 0, 50)
-Frame.Position = UDim2.new(0.5, -70, 0, 10)
-Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-Frame.BackgroundTransparency = 0.3
-Frame.BorderSizePixel = 0
-Frame.Parent = ScreenGui
+-- GUI references
+local ScreenGui = nil
+local Frame = nil
+local ShootButton = nil
+local StatusLabel = nil
 
-local Button = Instance.new("TextButton")
-Button.Size = UDim2.new(1, 0, 1, 0)
-Button.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-Button.BackgroundTransparency = 0.2
-Button.Text = "PERFECT AIM"
-Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-Button.Font = Enum.Font.GothamBold
-Button.TextSize = 14
-Button.Parent = Frame
-
--- Make frame draggable
-local dragging = false
-local dragInput, dragStart, startPos
-
-local function update(input)
-    local delta = input.Position - dragStart
-    Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+-- Function to create the GUI
+local function createGUI()
+    if ScreenGui then
+        ScreenGui:Destroy()
+    end
+    
+    local playerGui = player:WaitForChild("PlayerGui")
+    
+    ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "OneShotAimbotGUI"
+    ScreenGui.Parent = playerGui
+    
+    -- Small square frame (60x60)
+    Frame = Instance.new("Frame")
+    Frame.Size = UDim2.new(0, 60, 0, 60)
+    Frame.Position = UDim2.new(0.5, -30, 0, 10)
+    Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    Frame.BackgroundTransparency = 0.3
+    Frame.BorderSizePixel = 0
+    Frame.Parent = ScreenGui
+    
+    -- Draggable functionality
+    local dragging = false
+    local dragInput, dragStart, startPos
+    
+    local function updateDrag(input)
+        local delta = input.Position - dragStart
+        Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+    
+    Frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = Frame.Position
+            
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    
+    Frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            updateDrag(input)
+        end
+    end)
+    
+    -- Shoot Button (fills frame)
+    ShootButton = Instance.new("TextButton")
+    ShootButton.Size = UDim2.new(1, 0, 1, 0)
+    ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+    ShootButton.Text = "🔫"
+    ShootButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ShootButton.Font = Enum.Font.GothamBold
+    ShootButton.TextSize = 28
+    ShootButton.Parent = Frame
+    
+    -- Small status label below button
+    StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(0, 60, 0, 16)
+    StatusLabel.Position = UDim2.new(0, 0, 1, 2)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = "Ready"
+    StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 10
+    StatusLabel.TextStrokeTransparency = 0.5
+    StatusLabel.Parent = Frame
+    
+    -- UI Styling
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 10)
+    UICorner.Parent = Frame
+    
+    local UIStroke = Instance.new("UIStroke")
+    UIStroke.Color = Color3.fromRGB(255, 255, 255)
+    UIStroke.Thickness = 1.5
+    UIStroke.Parent = Frame
+    
+    local ButtonCorner = Instance.new("UICorner")
+    ButtonCorner.CornerRadius = UDim.new(0, 10)
+    ButtonCorner.Parent = ShootButton
+    
+    -- Connect button
+    ShootButton.MouseButton1Click:Connect(attemptShot)
+    ShootButton.TouchTap:Connect(attemptShot)
+    
+    -- Reset state
+    canShoot = true
+    lastShotTime = 0
+    StatusLabel.Text = "Ready"
+    ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+    ShootButton.Text = "🔫"
 end
 
-Button.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = Frame.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
-    end
-end)
-
-Button.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        update(input)
-    end
-end)
-
--- Variables
-local autoAiming = false
-local connection
-local lastShot = 0
-local shotCooldown = 0.5 -- Cooldown between shots in seconds
-
--- Function to get nearest enemy with improved targeting
-local function getNearestEnemy()
-    local nearestPlayer = nil
-    local nearestDistance = math.huge
+-- Helper Functions (same as before)
+local function getWeapon()
     local character = player.Character
     if not character then return nil end
     
-    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
-    if not rootPart then return nil end
+    for _, tool in pairs(character:GetChildren()) do
+        if tool:IsA("Tool") and tool:FindFirstChild("fire") then
+            return tool
+        end
+    end
+    
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in pairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and tool:FindFirstChild("fire") then
+                tool.Parent = character
+                return tool
+            end
+        end
+    end
+    
+    return nil
+end
+
+local function hasClearLineOfSight(targetPlayer)
+    local character = player.Character
+    local targetChar = targetPlayer.Character
+    if not character or not targetChar then return false end
+    
+    local myRoot = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso")
+    if not myRoot or not targetRoot then return false end
+    
+    local startPos = myRoot.Position
+    local endPos = targetRoot.Position
+    local direction = (endPos - startPos).Unit
+    local distance = (endPos - startPos).Magnitude
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {character, targetChar}
+    raycastParams.IgnoreWater = true
+    
+    local raycastResult = Workspace:Raycast(startPos, direction * distance, raycastParams)
+    return raycastResult == nil
+end
+
+local function getNearestVisibleEnemy()
+    local character = player.Character
+    if not character then return nil end
+    
+    local myRoot = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+    if not myRoot then return nil end
+    
+    local nearest = nil
+    local minDist = math.huge
     
     for _, otherPlayer in pairs(Players:GetPlayers()) do
         if otherPlayer ~= player and otherPlayer.Character then
             local otherChar = otherPlayer.Character
             local humanoid = otherChar:FindFirstChild("Humanoid")
-            
-            -- Check if player is alive
             if humanoid and humanoid.Health > 0 then
                 local otherRoot = otherChar:FindFirstChild("HumanoidRootPart") or otherChar:FindFirstChild("Torso")
                 if otherRoot then
-                    local distance = (rootPart.Position - otherRoot.Position).Magnitude
-                    
-                    -- Check line of sight (optional, can be removed if causing issues)
-                    local raycastParams = RaycastParams.new()
-                    raycastParams.FilterDescendantsInstances = {character, otherChar}
-                    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-                    raycastParams.IgnoreWater = true
-                    
-                    local raycastResult = Workspace:Raycast(rootPart.Position, (otherRoot.Position - rootPart.Position).Unit * distance, raycastParams)
-                    
-                    if not raycastResult or raycastResult.Instance:IsDescendantOf(otherChar) then
-                        if distance < nearestDistance then
-                            nearestDistance = distance
-                            nearestPlayer = otherPlayer
-                        end
+                    local dist = (myRoot.Position - otherRoot.Position).Magnitude
+                    if dist < minDist and hasClearLineOfSight(otherPlayer) then
+                        minDist = dist
+                        nearest = otherPlayer
                     end
                 end
             end
         end
     end
     
-    return nearestPlayer, nearestDistance
+    return nearest
 end
 
--- Function to get KatanaPistol tool
-local function getKatanaPistol()
-    local character = player.Character
-    if not character then return nil end
-    
-    -- Check character first
-    local katanaPistol = character:FindFirstChild("KatanaPistol")
-    if katanaPistol then
-        return katanaPistol
-    end
-    
-    -- Check backpack
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        katanaPistol = backpack:FindFirstChild("KatanaPistol")
-        if katanaPistol then
-            -- Equip it
-            katanaPistol.Parent = character
-            return katanaPistol
-        end
-    end
-    
-    -- Check workspace (might be on ground)
-    katanaPistol = Workspace:FindFirstChild("KatanaPistol")
-    if katanaPistol and katanaPistol:IsA("Tool") then
-        katanaPistol.Parent = character
-        return katanaPistol
-    end
-    
-    return nil
-end
-
--- Function to equip second weapon if KatanaPistol not found
-local function equipSecondWeapon()
-    local character = player.Character
-    if not character then return nil end
-    
-    -- Try backpack
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        local tools = {}
-        for _, item in pairs(backpack:GetChildren()) do
-            if item:IsA("Tool") then
-                table.insert(tools, item)
-            end
-        end
-        
-        if #tools >= 2 then
-            -- Unequip current tools
-            for _, tool in pairs(character:GetChildren()) do
-                if tool:IsA("Tool") then
-                    tool.Parent = backpack
-                end
-            end
-            
-            -- Equip second tool
-            tools[2].Parent = character
-            return tools[2]
-        elseif #tools == 1 then
-            -- Equip only tool
-            for _, tool in pairs(character:GetChildren()) do
-                if tool:IsA("Tool") then
-                    tool.Parent = backpack
-                end
-            end
-            tools[1].Parent = character
-            return tools[1]
-        end
-    end
-    
-    -- Check if already have weapon
-    for _, item in pairs(character:GetChildren()) do
-        if item:IsA("Tool") then
-            return item
-        end
-    end
-    
-    return nil
-end
-
--- Function to execute complete shooting sequence
 local function shootEnemy(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then return false end
     
     local character = player.Character
     if not character then return false end
     
-    -- Get weapon
-    local weapon = getKatanaPistol()
+    local weapon = getWeapon()
     if not weapon then
-        weapon = equipSecondWeapon()
-        if not weapon then return false end
+        StatusLabel.Text = "No weapon"
+        return false
     end
     
-    -- Get weapon handle
     local handle = weapon:FindFirstChild("Handle")
-    if not handle then return false end
+    if not handle then
+        StatusLabel.Text = "No handle"
+        return false
+    end
     
-    -- Get target position
     local targetChar = targetPlayer.Character
     local targetRoot = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso")
     if not targetRoot then return false end
     
-    -- Get our position (from handle)
     local startPos = handle.Position
+    local hitPos = targetRoot.Position
     
-    -- Calculate direction for beam
-    local endPos = targetRoot.Position
+    -- Client-side beam
+    local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
+    if localBeam then
+        pcall(function() localBeam:Fire(handle, hitPos) end)
+    end
     
-    -- Execute the 3-step shooting sequence
-    local success = true
-    
-    -- Step 1: Fire the "fire" remote
+    -- Fire remote
     local fireRemote = weapon:FindFirstChild("fire")
-    if fireRemote and fireRemote:IsA("RemoteEvent") then
-        pcall(function()
-            fireRemote:FireServer()
-        end)
-    else
-        success = false
-        print("No fire remote found")
+    if fireRemote then
+        pcall(function() fireRemote:FireServer() end)
     end
     
-    -- Step 2: Fire the "showBeam" remote
+    -- ShowBeam remote (hitPos, startPos, handle)
     local beamRemote = weapon:FindFirstChild("showBeam")
-    if beamRemote and beamRemote:IsA("RemoteEvent") then
-        pcall(function()
-            local args = {
-                startPos,
-                endPos,
-                handle
-            }
-            beamRemote:FireServer(unpack(args))
-        end)
-    else
-        success = false
-        print("No showBeam remote found")
+    if beamRemote then
+        pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end)
     end
     
-    -- Step 3: Fire the "kill" remote
+    -- Kill remote
     local killRemote = weapon:FindFirstChild("kill")
-    if killRemote and killRemote:IsA("RemoteEvent") then
-        pcall(function()
-            local args = {
-                targetPlayer,
-                (endPos - startPos).Unit -- Direction vector
-            }
-            killRemote:FireServer(unpack(args))
-        end)
-    else
-        success = false
-        print("No kill remote found")
+    if killRemote then
+        local direction = (hitPos - startPos).Unit
+        pcall(function() killRemote:FireServer(targetPlayer, direction) end)
     end
     
-    -- Also try the ReplicatedStorage kill remote
-    if success then
-        pcall(function()
-            local replicatedKill = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-            if replicatedKill then
-                local killedRemote = replicatedKill:FindFirstChild("Killed")
-                if killedRemote then
-                    killedRemote:FireServer(targetPlayer)
-                end
-            end
-        end)
-    end
+    -- Optional Killed remote
+    pcall(function()
+        local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
+        if killedRemote then
+            killedRemote:FireServer(targetPlayer)
+        end
+    end)
     
-    return success
+    return true
 end
 
--- Main toggle function
-Button.MouseButton1Click:Connect(function()
-    autoAiming = not autoAiming
+local function startCooldown()
+    canShoot = false
+    lastShotTime = tick()
+    ShootButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    ShootButton.Text = "⏳"
     
-    if autoAiming then
-        Button.BackgroundColor3 = Color3.fromRGB(50, 255, 50)
-        Button.Text = "AIMING..."
-        
-        -- Start aim loop
-        connection = RunService.RenderStepped:Connect(function()
-            if autoAiming then
-                -- Check cooldown
-                local currentTime = tick()
-                if currentTime - lastShot >= shotCooldown then
-                    -- Get nearest enemy
-                    local nearestEnemy = getNearestEnemy()
-                    if nearestEnemy then
-                        -- Shoot enemy
-                        local success = shootEnemy(nearestEnemy)
-                        if success then
-                            lastShot = currentTime
-                            Button.Text = "SHOOTING!"
-                            task.wait(0.1)
-                            Button.Text = "AIMING..."
-                        else
-                            Button.Text = "NO WEAPON"
-                            task.wait(0.5)
-                            Button.Text = "AIMING..."
-                        end
-                    else
-                        Button.Text = "NO TARGET"
-                        task.wait(0.5)
-                        Button.Text = "AIMING..."
-                    end
-                end
-            end
-        end)
-        
-        print("Perfect Auto-Aim activated!")
-        print("Using KatanaPistol fire -> showBeam -> kill sequence")
-        
+    task.spawn(function()
+        while tick() - lastShotTime < cooldownTime do
+            local remaining = cooldownTime - (tick() - lastShotTime)
+            StatusLabel.Text = string.format("%.1fs", remaining)
+            task.wait(0.1)
+        end
+        canShoot = true
+        ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+        ShootButton.Text = "🔫"
+        StatusLabel.Text = "Ready"
+    end)
+end
+
+function attemptShot()
+    if not canShoot then
+        StatusLabel.Text = "Wait"
+        return
+    end
+    
+    local weapon = getWeapon()
+    if not weapon then
+        StatusLabel.Text = "No gun"
+        return
+    end
+    
+    StatusLabel.Text = "Search"
+    local target = getNearestVisibleEnemy()
+    
+    if target then
+        StatusLabel.Text = target.Name
+        local success = shootEnemy(target)
+        if success then
+            startCooldown()
+        else
+            StatusLabel.Text = "Failed"
+            task.wait(1)
+            StatusLabel.Text = "Ready"
+        end
     else
-        Button.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-        Button.Text = "PERFECT AIM"
-        
-        -- Disconnect the loop
-        if connection then
-            connection:Disconnect()
-            connection = nil
-        end
-        
-        print("Auto-aim deactivated")
-    end
-end)
-
--- Add UI effects
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = Frame
-
-local UIStroke = Instance.new("UIStroke")
-UIStroke.Color = Color3.fromRGB(255, 255, 255)
-UIStroke.Thickness = 2
-UIStroke.Parent = Frame
-
--- Add status label
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(1, 0, 0, 20)
-StatusLabel.Position = UDim2.new(0, 0, 1, 5)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "Ready to aim"
-StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.TextSize = 12
-StatusLabel.Parent = Frame
-
--- Add weapon status
-local WeaponLabel = Instance.new("TextLabel")
-WeaponLabel.Size = UDim2.new(1, 0, 0, 20)
-WeaponLabel.Position = UDim2.new(0, 0, 1, 25)
-WeaponLabel.BackgroundTransparency = 1
-WeaponLabel.Text = "Weapon: None"
-WeaponLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-WeaponLabel.Font = Enum.Font.Gotham
-WeaponLabel.TextSize = 12
-WeaponLabel.Parent = Frame
-
--- Update weapon status periodically
-spawn(function()
-    while true do
+        StatusLabel.Text = "No target"
         task.wait(1)
-        if autoAiming then
-            local weapon = getKatanaPistol() or equipSecondWeapon()
-            if weapon then
-                WeaponLabel.Text = "Weapon: " .. weapon.Name
-            else
-                WeaponLabel.Text = "Weapon: None"
-            end
+        if canShoot then
+            StatusLabel.Text = "Ready"
         end
     end
+end
+
+-- Respawn handling
+player.CharacterAdded:Connect(function(character)
+    task.wait(0.1)
+    createGUI()
 end)
 
--- Clean up
-ScreenGui.Destroying:Connect(function()
-    if connection then
-        connection:Disconnect()
-    end
-    autoAiming = false
-end)
+if player.Character then
+    createGUI()
+else
+    player.CharacterAdded:Wait()
+    createGUI()
+end
 
 print("==========================================")
-print("PERFECT AUTO-AIM SCRIPT LOADED!")
-print("Uses the exact remote events you found:")
-print("1. fire remote")
-print("2. showBeam remote")
-print("3. kill remote")
-print("==========================================")
-print("Instructions:")
-print("1. Make sure you have KatanaPistol or any weapon")
-print("2. Click the button to activate")
-print("3. It will automatically find and shoot nearest enemy")
+print("ONE-SHOT AIMBOT LOADED (SMALL SQUARE GUI)")
+print("GUI persists through respawns")
 print("==========================================")
