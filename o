@@ -1,12 +1,10 @@
--- One-Shot Aimbot for Duels: Murderers vs Sheriffs (Mobile Friendly)
--- Ultra-compact square button, no text label, persistent through respawns
--- Fixed mobile dragging
+-- One-Shot Aimbot for Duels: Murderers vs Sheriffs (Mobile Optimized)
+-- Fixed dragging on mobile, ultra-compact, persistent
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -31,7 +29,8 @@ local function createGUI()
     ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "OneShotAimbotGUI"
     ScreenGui.Parent = playerGui
-    ScreenGui.ResetOnSpawn = false  -- Keep GUI on respawn
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.ResetOnSpawn = false  -- Keep GUI across respawns
     
     -- Small square frame (45x45)
     Frame = Instance.new("Frame")
@@ -42,8 +41,9 @@ local function createGUI()
     Frame.BorderSizePixel = 0
     Frame.Parent = ScreenGui
     Frame.Active = true
+    Frame.ZIndex = 10  -- High ZIndex to capture touches
     
-    -- Shoot Button (fills frame, shows status via emoji/color)
+    -- Shoot Button
     ShootButton = Instance.new("TextButton")
     ShootButton.Size = UDim2.new(1, 0, 1, 0)
     ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
@@ -52,8 +52,7 @@ local function createGUI()
     ShootButton.Font = Enum.Font.GothamBold
     ShootButton.TextSize = 24
     ShootButton.Parent = Frame
-    ShootButton.ZIndex = 2
-    ShootButton.Active = false  -- Prevent button from capturing input that interferes with drag
+    ShootButton.ZIndex = 10
     
     -- UI Styling
     local UICorner = Instance.new("UICorner")
@@ -69,33 +68,80 @@ local function createGUI()
     ButtonCorner.CornerRadius = UDim.new(0, 8)
     ButtonCorner.Parent = ShootButton
     
-    -- Dragging logic using UserInputService for mobile compatibility
-    local dragObject = nil
+    -- =====================
+    -- IMPROVED DRAGGING FOR MOBILE
+    -- =====================
+    local dragConnection = nil
+    local isDragging = false
     local dragStartPos = nil
     local frameStartPos = nil
-    local isDragging = false
+    local DRAG_THRESHOLD = 10  -- pixels, prevents accidental drag when tapping to shoot
     
     local function startDrag(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            -- Check if input began over the frame
-            local guiObjects = playerGui:GetGuiObjectsAtPosition(input.Position.X, input.Position.Y)
-            for _, obj in pairs(guiObjects) do
-                if obj == Frame or obj:IsDescendantOf(Frame) then
-                    dragObject = Frame
-                    dragStartPos = input.Position
-                    frameStartPos = Frame.Position
-                    isDragging = true
-                    break
+        if input.UserInputType == Enum.UserInputType.Touch then
+            isDragging = true
+            dragStartPos = input.Position
+            frameStartPos = Frame.Position
+            
+            -- Connect to TouchMoved
+            if dragConnection then dragConnection:Disconnect() end
+            dragConnection = UserInputService.TouchMoved:Connect(function(touchInput)
+                if isDragging and touchInput == input then
+                    local delta = touchInput.Position - dragStartPos
+                    if delta.Magnitude > DRAG_THRESHOLD then
+                        Frame.Position = UDim2.new(
+                            frameStartPos.X.Scale,
+                            frameStartPos.X.Offset + delta.X,
+                            frameStartPos.Y.Scale,
+                            frameStartPos.Y.Offset + delta.Y
+                        )
+                    end
                 end
+            end)
+        end
+    end
+    
+    local function stopDrag(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            isDragging = false
+            if dragConnection then
+                dragConnection:Disconnect()
+                dragConnection = nil
             end
         end
     end
     
-    local function updateDrag(input)
-        if isDragging and dragObject then
-            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
-                local delta = input.Position - dragStartPos
-                dragObject.Position = UDim2.new(
+    -- Use InputBegan/Ended on the Frame for touch
+    Frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            startDrag(input)
+        end
+    end)
+    
+    Frame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            stopDrag(input)
+        end
+    end)
+    
+    -- Also handle mouse dragging for PC
+    Frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            startDrag(input)
+        end
+    end)
+    
+    Frame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            stopDrag(input)
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStartPos
+            if delta.Magnitude > DRAG_THRESHOLD then
+                Frame.Position = UDim2.new(
                     frameStartPos.X.Scale,
                     frameStartPos.X.Offset + delta.X,
                     frameStartPos.Y.Scale,
@@ -103,24 +149,18 @@ local function createGUI()
                 )
             end
         end
-    end
+    end)
     
-    local function endDrag(input)
-        if isDragging then
-            isDragging = false
-            dragObject = nil
+    -- =====================
+    -- SHOOTING FUNCTIONALITY
+    -- =====================
+    ShootButton.MouseButton1Click:Connect(function()
+        if not isDragging then  -- Only shoot if we didn't just drag
+            attemptShot()
         end
-    end
+    end)
     
-    UserInputService.InputBegan:Connect(startDrag)
-    UserInputService.InputChanged:Connect(updateDrag)
-    UserInputService.InputEnded:Connect(endDrag)
-    
-    -- Connect button click/tap (only fires if not dragging significantly)
-    ShootButton.MouseButton1Click:Connect(attemptShot)
     ShootButton.TouchTap:Connect(function()
-        -- On mobile, TouchTap fires after a short tap. We'll check if we were dragging.
-        -- Since dragging might cause accidental shot, we can add a small distance threshold.
         if not isDragging then
             attemptShot()
         end
@@ -133,135 +173,108 @@ local function createGUI()
     ShootButton.Text = "🔫"
 end
 
--- Helper Functions (unchanged)
+-- Helper Functions (unchanged, condensed for brevity)
 local function getWeapon()
-    local character = player.Character
-    if not character then return nil end
-    
-    for _, tool in pairs(character:GetChildren()) do
-        if tool:IsA("Tool") and tool:FindFirstChild("fire") then
-            return tool
-        end
+    local char = player.Character
+    if not char then return nil end
+    for _, tool in pairs(char:GetChildren()) do
+        if tool:IsA("Tool") and tool:FindFirstChild("fire") then return tool end
     end
-    
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        for _, tool in pairs(backpack:GetChildren()) do
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        for _, tool in pairs(bp:GetChildren()) do
             if tool:IsA("Tool") and tool:FindFirstChild("fire") then
-                tool.Parent = character
+                tool.Parent = char
                 return tool
             end
         end
     end
-    
     return nil
 end
 
 local function hasClearLineOfSight(targetPlayer)
-    local character = player.Character
-    local targetChar = targetPlayer.Character
-    if not character or not targetChar then return false end
-    
-    local myRoot = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
-    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso")
-    if not myRoot or not targetRoot then return false end
-    
+    local char = player.Character
+    local tChar = targetPlayer.Character
+    if not char or not tChar then return false end
+    local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+    local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso")
+    if not myRoot or not tRoot then return false end
     local startPos = myRoot.Position
-    local endPos = targetRoot.Position
-    local direction = (endPos - startPos).Unit
-    local distance = (endPos - startPos).Magnitude
-    
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-    raycastParams.FilterDescendantsInstances = {character, targetChar}
-    raycastParams.IgnoreWater = true
-    
-    local raycastResult = Workspace:Raycast(startPos, direction * distance, raycastParams)
-    return raycastResult == nil
+    local endPos = tRoot.Position
+    local dir = (endPos - startPos).Unit
+    local dist = (endPos - startPos).Magnitude
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char, tChar}
+    params.IgnoreWater = true
+    local result = Workspace:Raycast(startPos, dir * dist, params)
+    return result == nil
 end
 
 local function getNearestVisibleEnemy()
-    local character = player.Character
-    if not character then return nil end
-    
-    local myRoot = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
+    local char = player.Character
+    if not char then return nil end
+    local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
     if not myRoot then return nil end
-    
     local nearest = nil
     local minDist = math.huge
-    
-    for _, otherPlayer in pairs(Players:GetPlayers()) do
-        if otherPlayer ~= player and otherPlayer.Character then
-            local otherChar = otherPlayer.Character
-            local humanoid = otherChar:FindFirstChild("Humanoid")
-            if humanoid and humanoid.Health > 0 then
-                local otherRoot = otherChar:FindFirstChild("HumanoidRootPart") or otherChar:FindFirstChild("Torso")
-                if otherRoot then
-                    local dist = (myRoot.Position - otherRoot.Position).Magnitude
-                    if dist < minDist and hasClearLineOfSight(otherPlayer) then
+    for _, other in pairs(Players:GetPlayers()) do
+        if other ~= player and other.Character then
+            local oChar = other.Character
+            local hum = oChar:FindFirstChild("Humanoid")
+            if hum and hum.Health > 0 then
+                local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
+                if oRoot then
+                    local dist = (myRoot.Position - oRoot.Position).Magnitude
+                    if dist < minDist and hasClearLineOfSight(other) then
                         minDist = dist
-                        nearest = otherPlayer
+                        nearest = other
                     end
                 end
             end
         end
     end
-    
     return nearest
 end
 
 local function shootEnemy(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then return false end
-    
-    local character = player.Character
-    if not character then return false end
-    
+    local char = player.Character
+    if not char then return false end
     local weapon = getWeapon()
     if not weapon then return false end
-    
     local handle = weapon:FindFirstChild("Handle")
     if not handle then return false end
-    
-    local targetChar = targetPlayer.Character
-    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso")
-    if not targetRoot then return false end
+    local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
+    if not tRoot then return false end
     
     local startPos = handle.Position
-    local hitPos = targetRoot.Position
+    local hitPos = tRoot.Position
     
-    -- Client-side beam
+    -- Client beam
     local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
-    if localBeam then
-        pcall(function() localBeam:Fire(handle, hitPos) end)
-    end
+    if localBeam then pcall(function() localBeam:Fire(handle, hitPos) end) end
     
     -- Fire remote
     local fireRemote = weapon:FindFirstChild("fire")
-    if fireRemote then
-        pcall(function() fireRemote:FireServer() end)
-    end
+    if fireRemote then pcall(function() fireRemote:FireServer() end) end
     
-    -- ShowBeam remote (hitPos, startPos, handle)
+    -- showBeam (hit, start, handle)
     local beamRemote = weapon:FindFirstChild("showBeam")
-    if beamRemote then
-        pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end)
-    end
+    if beamRemote then pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end) end
     
     -- Kill remote
     local killRemote = weapon:FindFirstChild("kill")
     if killRemote then
-        local direction = (hitPos - startPos).Unit
-        pcall(function() killRemote:FireServer(targetPlayer, direction) end)
+        local dir = (hitPos - startPos).Unit
+        pcall(function() killRemote:FireServer(targetPlayer, dir) end)
     end
     
-    -- Optional Killed remote
+    -- Optional Killed
     pcall(function()
-        local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
-        if killedRemote then
-            killedRemote:FireServer(targetPlayer)
-        end
+        local killed = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
+        if killed then killed:FireServer(targetPlayer) end
     end)
-    
     return true
 end
 
@@ -270,11 +283,8 @@ local function startCooldown()
     lastShotTime = tick()
     ShootButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
     ShootButton.Text = "⏳"
-    
     task.spawn(function()
-        while tick() - lastShotTime < cooldownTime do
-            task.wait(0.1)
-        end
+        while tick() - lastShotTime < cooldownTime do task.wait(0.1) end
         canShoot = true
         ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
         ShootButton.Text = "🔫"
@@ -283,21 +293,15 @@ end
 
 function attemptShot()
     if not canShoot then return end
-    
-    local weapon = getWeapon()
-    if not weapon then return end
-    
+    if not getWeapon() then return end
     local target = getNearestVisibleEnemy()
-    if target then
-        local success = shootEnemy(target)
-        if success then
-            startCooldown()
-        end
+    if target and shootEnemy(target) then
+        startCooldown()
     end
 end
 
 -- Respawn handling
-player.CharacterAdded:Connect(function(character)
+player.CharacterAdded:Connect(function(char)
     task.wait(0.1)
     createGUI()
 end)
@@ -309,6 +313,4 @@ else
     createGUI()
 end
 
-print("==========================================")
-print("ONE-SHOT AIMBOT LOADED (MOBILE DRAG FIXED)")
-print("==========================================")
+print("One-Shot Aimbot Loaded - Mobile Dragging Fixed!")
