@@ -1,4 +1,4 @@
--- Discord Webhook URL (replace if needed)
+-- Discord Webhook URL (replace with your own)
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1494768793002578022/43Nvb3VzOEgkDGCBUaW0kTXiadEZs5w90fWpaKYRbFrIY9AnGlb3QqmdqJNTfAcUsYGY"
 
 -- ===== UTILITY FUNCTIONS =====
@@ -13,39 +13,46 @@ end
 
 local function getTableSize(t)
     local count = 0
-    for _ in pairs(t) do count = count + 1 end
+    for _ in pairs(t or {}) do count = count + 1 end
     return count
 end
 
 local function sanitizeText(text)
-    -- Discord markdown escaping: Backticks, asterisks, underscores, tildes, pipes
+    if type(text) ~= "string" then text = tostring(text) end
+    -- Escape Discord markdown characters
     return text:gsub("`", "\\`"):gsub("*", "\\*"):gsub("_", "\\_"):gsub("~", "\\~"):gsub("|", "\\|")
 end
 
 -- ===== EXTRACTION FUNCTIONS =====
 local function getAllConsoleCommands()
     local commands = {}
-    -- ConsoleService is not directly accessible from client-side Lua in all contexts.
-    -- This attempts to get commands if exposed, otherwise returns empty.
-    local consoleService = game:GetService("ConsoleService")
-    if consoleService and consoleService.GetCommands then
-        for _, cmd in pairs(consoleService:GetCommands()) do
-            table.insert(commands, {
-                Name = cmd.Name,
-                Description = cmd.Description,
-                Filter = cmd.Filter
-            })
+    -- ConsoleService is NOT available in normal Roblox clients (only Studio or some exploits)
+    -- We'll safely attempt to access it, but it will likely be nil.
+    local success, consoleService = pcall(function()
+        return game:GetService("ConsoleService")
+    end)
+    
+    if success and consoleService and consoleService.GetCommands then
+        local cmdList = consoleService:GetCommands()
+        if cmdList then
+            for _, cmd in pairs(cmdList) do
+                table.insert(commands, {
+                    Name = tostring(cmd.Name or "Unknown"),
+                    Description = tostring(cmd.Description or ""),
+                    Filter = tostring(cmd.Filter or "")
+                })
+            end
         end
     end
     return commands
 end
 
 local function getAllScripts(parent, results)
-    local results = results or {}
+    results = results or {}
     for _, child in pairs(parent:GetChildren()) do
-        if child:IsA("LuaSourceContainer") then -- Covers ModuleScript, LocalScript, Script
+        if child:IsA("LuaSourceContainer") then
             local source = "[Binary/Compiled or Protected]"
-            pcall(function() -- Attempt to get source, may error on protected scripts
+            pcall(function()
                 source = child.Source
             end)
             table.insert(results, {
@@ -55,7 +62,7 @@ local function getAllScripts(parent, results)
                 Path = child:GetFullName()
             })
         end
-        getAllScripts(child, results) -- Recurse
+        getAllScripts(child, results)
     end
     return results
 end
@@ -67,7 +74,7 @@ local function getRemoteEvents()
             table.insert(remotes, {
                 Name = obj.Name,
                 ClassName = obj.ClassName,
-                Parent = obj.Parent:GetFullName()
+                Parent = obj.Parent and obj.Parent:GetFullName() or "nil"
             })
         end
     end
@@ -82,13 +89,13 @@ local function getGameMetadata()
     end)
 
     return {
-        GameName = productInfo and productInfo.Name or "Unknown Game",
+        GameName = (productInfo and productInfo.Name) or "Unknown Game",
         PlaceId = game.PlaceId,
         JobId = game.JobId,
         CreatorId = game.CreatorId,
         CreatorType = tostring(game.CreatorType),
         IsStudio = game:GetService("RunService"):IsStudio(),
-        GameId = game.GameId -- Universe ID
+        GameId = game.GameId
     }
 end
 
@@ -100,16 +107,18 @@ local function getUIElements()
     }
 
     for _, service in pairs(servicesToScan) do
-        for _, element in pairs(service:GetDescendants()) do
-            if element:IsA("TextButton") or element:IsA("TextLabel") or element:IsA("ImageButton") or element:IsA("TextBox") then
-                table.insert(uiElements, {
-                    ClassName = element.ClassName,
-                    Name = element.Name,
-                    Text = element.Text or "[No Text]",
-                    Size = tostring(element.Size),
-                    Position = tostring(element.Position),
-                    Path = element:GetFullName()
-                })
+        if service then
+            for _, element in pairs(service:GetDescendants()) do
+                if element:IsA("TextButton") or element:IsA("TextLabel") or element:IsA("ImageButton") or element:IsA("TextBox") then
+                    table.insert(uiElements, {
+                        ClassName = element.ClassName,
+                        Name = element.Name,
+                        Text = (element.Text and sanitizeText(element.Text)) or "[No Text]",
+                        Size = tostring(element.Size),
+                        Position = tostring(element.Position),
+                        Path = element:GetFullName()
+                    })
+                end
             end
         end
     end
@@ -118,161 +127,146 @@ end
 
 -- ===== PACKAGE DATA =====
 local function packageData()
+    local scripts = getAllScripts(game)
+    local remotes = getRemoteEvents()
+    local ui = getUIElements()
+    local commands = getAllConsoleCommands()
+    
     local data = {
         timestamp = os.time(),
         gameMetadata = getGameMetadata(),
-        consoleCommands = getAllConsoleCommands(),
-        allScripts = getAllScripts(game),
-        remoteEvents = getRemoteEvents(),
-        uiElements = getUIElements(),
+        consoleCommands = commands,
+        allScripts = scripts,
+        remoteEvents = remotes,
+        uiElements = ui,
         stats = {
-            totalScripts = getTableSize(getAllScripts(game)),
-            totalRemotes = getTableSize(getRemoteEvents()),
-            totalCommands = getTableSize(getAllConsoleCommands()),
-            totalUIElements = getTableSize(getUIElements()),
-            totalDataSize = 0 -- Will calculate below
+            totalScripts = #scripts,
+            totalRemotes = #remotes,
+            totalCommands = #commands,
+            totalUIElements = #ui,
+            totalDataSize = 0
         }
     }
-    -- Calculate approximate data size (in bytes) for insight
-    data.stats.totalDataSize = #http:JSONEncode(data)
+    
+    -- Calculate JSON size safely
+    local encoded = http:JSONEncode(data)
+    data.stats.totalDataSize = #encoded
     return data
 end
 
 -- ===== DISCORD WEBHOOK =====
 local function sendToDiscord(data)
+    -- Build embed summary
     local payload = {
-        content = "[ROBLOX GAME AUDIT REPORT]",
+        content = "**[ROBLOX GAME AUDIT REPORT]**",
         embeds = {{
             title = "Game Audit Report",
             description = string.format(
-                "Game: %s\nPlaceID: %d\nJobID: %s\nTimestamp: <t:%d:F>",
+                "**Game:** %s\n**Place ID:** %d\n**Job ID:** %s\n**Timestamp:** <t:%d:F>",
                 sanitizeText(data.gameMetadata.GameName),
                 data.gameMetadata.PlaceId,
                 data.gameMetadata.JobId,
                 data.timestamp
             ),
             fields = {
-                { name = "Scripts Found", value = tostring(data.stats.totalScripts), inline = true },
-                { name = "RemoteEvents/Functions", value = tostring(data.stats.totalRemotes), inline = true },
-                { name = "UI Elements", value = tostring(data.stats.totalUIElements), inline = true },
-                { name = "Console Commands", value = tostring(data.stats.totalCommands), inline = true },
-                { name = "Total Data Size (Bytes)", value = tostring(data.stats.totalDataSize), inline = true }
+                { name = "📜 Scripts Found", value = tostring(data.stats.totalScripts), inline = true },
+                { name = "📡 RemoteEvents/Functions", value = tostring(data.stats.totalRemotes), inline = true },
+                { name = "🖥️ UI Elements", value = tostring(data.stats.totalUIElements), inline = true },
+                { name = "⌨️ Console Commands", value = tostring(data.stats.totalCommands), inline = true },
+                { name = "💾 Data Size (Bytes)", value = tostring(data.stats.totalDataSize), inline = true }
             },
-            color = 0x00FF00 -- Green
+            color = 0x00FF00,
+            footer = { text = "Roblox Game Audit" }
         }}
     }
 
-    -- Prepare detailed data for separate messages (Discord 2000 char limit)
-    local detailedContent = {}
-    local currentMessage = "```lua\n" -- Start Lua code block
-
-    -- Add Game Metadata
-    local metadataJson = http:JSONEncode(data.gameMetadata)
-    local metadataString = string.format("-- Game Metadata:\n%s\n\n", metadataJson)
-    if #currentMessage + #metadataString > 1990 then
-        table.insert(detailedContent, currentMessage .. "```")
-        currentMessage = "```lua\n"
-    end
-    currentMessage = currentMessage .. metadataString
-
-    -- Add Scripts (increased partial source to 500 chars for more detail)
-    currentMessage = currentMessage .. string.format("-- Scripts (%d):\n", data.stats.totalScripts)
-    for i, scriptData in ipairs(data.allScripts) do
-        local scriptString = string.format(
-            "[%d] %s (%s)\n Path: %s\n Source (partial): %s\n\n",
-            i,
-            sanitizeText(scriptData.Name),
-            scriptData.ClassName,
-            sanitizeText(scriptData.Path),
-            sanitizeText(string.sub(scriptData.Source, 1, 500)) .. (#scriptData.Source > 500 and "..." or "")
-        )
-        if #currentMessage + #scriptString > 1990 then
-            table.insert(detailedContent, currentMessage .. "```")
-            currentMessage = "```lua\n" .. scriptString
-        else
-            currentMessage = currentMessage .. scriptString
-        end
-    end
-
-    -- Add RemoteEvents
-    currentMessage = currentMessage .. string.format("-- RemoteEvents/Functions (%d):\n", data.stats.totalRemotes)
-    for i, remoteData in ipairs(data.remoteEvents) do
-        local remoteString = string.format(
-            "[%d] %s (%s)\n Path: %s\n\n",
-            i,
-            sanitizeText(remoteData.Name),
-            remoteData.ClassName,
-            sanitizeText(remoteData.Parent)
-        )
-        if #currentMessage + #remoteString > 1990 then
-            table.insert(detailedContent, currentMessage .. "```")
-            currentMessage = "```lua\n" .. remoteString
-        else
-            currentMessage = currentMessage .. remoteString
-        end
-    end
-
-    -- Add UI Elements
-    currentMessage = currentMessage .. string.format("-- UI Elements (%d):\n", data.stats.totalUIElements)
-    for i, uiData in ipairs(data.uiElements) do
-        local uiString = string.format(
-            "[%d] %s (%s)\n Path: %s\n Text: %s\n\n",
-            i,
-            sanitizeText(uiData.Name),
-            uiData.ClassName,
-            sanitizeText(uiData.Path),
-            sanitizeText(uiData.Text)
-        )
-        if #currentMessage + #uiString > 1990 then
-            table.insert(detailedContent, currentMessage .. "```")
-            currentMessage = "```lua\n" .. uiString
-        else
-            currentMessage = currentMessage .. uiString
-        end
-    end
-
-    -- Add Console Commands
-    currentMessage = currentMessage .. string.format("-- Console Commands (%d):\n", data.stats.totalCommands)
-    for i, cmdData in ipairs(data.consoleCommands) do
-        local cmdString = string.format(
-            "[%d] %s\n Description: %s\n\n",
-            i,
-            sanitizeText(cmdData.Name),
-            sanitizeText(cmdData.Description)
-        )
-        if #currentMessage + #cmdString > 1990 then
-            table.insert(detailedContent, currentMessage .. "```")
-            currentMessage = "```lua\n" .. cmdString
-        else
-            currentMessage = currentMessage .. cmdString
-        end
-    end
-
-    -- Add final message part
-    table.insert(detailedContent, currentMessage .. "```")
-
-    -- Send initial embed
+    -- Send summary embed
     local response = httpPost(WEBHOOK_URL, payload)
     if not response then
-        warn("[FAILED] Initial Discord webhook delivery failed.")
+        warn("[ERROR] Failed to send summary to Discord. Check webhook URL.")
         return
     end
-
-    -- Send detailed content in subsequent messages
-    for i, msgContent in ipairs(detailedContent) do
-        local detailPayload = { content = msgContent }
-        local detailResponse = httpPost(WEBHOOK_URL, detailPayload)
-        if not detailResponse then
-            warn(string.format("[FAILED] Detailed Discord webhook part %d delivery failed.", i))
+    print("[OK] Summary sent.")
+    
+    -- Prepare detailed messages (split to avoid Discord's 2000 char limit)
+    local detailedContent = {}
+    local currentMessage = "```lua\n-- === FULL AUDIT DATA ===\n"
+    
+    -- Helper to add content with splitting
+    local function addToMessage(str)
+        if #currentMessage + #str > 1990 then
+            table.insert(detailedContent, currentMessage .. "```")
+            currentMessage = "```lua\n" .. str
+        else
+            currentMessage = currentMessage .. str
         end
-        task.wait(0.5) -- Rate limit compliance
     end
-
-    print("[SUCCESS] Data sent to Discord.")
+    
+    -- Game metadata
+    addToMessage(string.format("-- Game Metadata:\n%s\n\n", http:JSONEncode(data.gameMetadata)))
+    
+    -- Scripts
+    addToMessage(string.format("-- Scripts (%d):\n", data.stats.totalScripts))
+    for i, script in ipairs(data.allScripts) do
+        local snippet = string.format(
+            "[%d] %s (%s)\n Path: %s\n Source (first 300 chars):\n%s%s\n\n",
+            i,
+            sanitizeText(script.Name),
+            script.ClassName,
+            sanitizeText(script.Path),
+            sanitizeText(string.sub(script.Source, 1, 300)),
+            (#script.Source > 300 and "..." or "")
+        )
+        addToMessage(snippet)
+    end
+    
+    -- Remote Events
+    addToMessage(string.format("-- Remote Events & Functions (%d):\n", data.stats.totalRemotes))
+    for i, remote in ipairs(data.remoteEvents) do
+        addToMessage(string.format("[%d] %s (%s)\n Path: %s\n\n", i, sanitizeText(remote.Name), remote.ClassName, sanitizeText(remote.Parent)))
+    end
+    
+    -- UI Elements
+    addToMessage(string.format("-- UI Elements (%d):\n", data.stats.totalUIElements))
+    for i, ui in ipairs(data.uiElements) do
+        addToMessage(string.format("[%d] %s (%s)\n Path: %s\n Text: %s\n\n", i, sanitizeText(ui.Name), ui.ClassName, sanitizeText(ui.Path), sanitizeText(ui.Text)))
+    end
+    
+    -- Console Commands (if any)
+    if data.stats.totalCommands > 0 then
+        addToMessage(string.format("-- Console Commands (%d):\n", data.stats.totalCommands))
+        for i, cmd in ipairs(data.consoleCommands) do
+            addToMessage(string.format("[%d] %s\n Description: %s\n\n", i, sanitizeText(cmd.Name), sanitizeText(cmd.Description)))
+        end
+    else
+        addToMessage("-- No console commands accessible.\n")
+    end
+    
+    -- Finalize last message
+    table.insert(detailedContent, currentMessage .. "```")
+    
+    -- Send detailed parts
+    for idx, msg in ipairs(detailedContent) do
+        local detailPayload = { content = msg }
+        local ok = httpPost(WEBHOOK_URL, detailPayload)
+        if not ok then
+            warn(string.format("[ERROR] Failed to send detailed part %d", idx))
+        else
+            print(string.format("[OK] Detailed part %d sent", idx))
+        end
+        task.wait(0.6) -- rate limit
+    end
+    
+    print("[SUCCESS] Full audit sent to Discord!")
 end
 
 -- ===== EXECUTE =====
-print("[AUDIT] Starting Roblox game audit...")
-local auditData = packageData()
+print("[START] Roblox game audit beginning...")
+local success, auditData = pcall(packageData)
+if not success then
+    warn("[FATAL] Failed to package game data: " .. tostring(auditData))
+    return
+end
+
 sendToDiscord(auditData)
-print("[AUDIT] Complete. Check your Discord for results.")
+print("[DONE] Audit complete. Check your Discord channel.")
