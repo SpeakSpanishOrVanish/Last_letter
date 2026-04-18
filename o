@@ -1,5 +1,5 @@
--- One-Shot Aimbot for Duels: Murderers vs Sheriffs (Mobile Optimized)
--- Fixed dragging on mobile, ultra-compact, persistent
+-- One-Shot Aimbot for Duels: Murderers vs Sheriffs (Mobile Dragging Fixed)
+-- Ultra-compact button, smooth drag, persistent
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -13,16 +13,19 @@ local cooldownTime = 2.5
 local lastShotTime = 0
 local canShoot = true
 
--- GUI references
+-- GUI
 local ScreenGui = nil
-local Frame = nil
-local ShootButton = nil
+local Button = nil
 
--- Function to create the GUI
+-- Dragging state
+local isDragging = false
+local dragStartPos = nil
+local buttonStartPos = nil
+local dragThreshold = 8  -- pixels moved before considered a drag
+
+-- Function to create GUI
 local function createGUI()
-    if ScreenGui then
-        ScreenGui:Destroy()
-    end
+    if ScreenGui then ScreenGui:Destroy() end
     
     local playerGui = player:WaitForChild("PlayerGui")
     
@@ -30,137 +33,72 @@ local function createGUI()
     ScreenGui.Name = "OneShotAimbotGUI"
     ScreenGui.Parent = playerGui
     ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.ResetOnSpawn = false  -- Keep GUI across respawns
+    ScreenGui.IgnoreGuiInset = true  -- Prevents screen notch issues
     
-    -- Small square frame (45x45)
-    Frame = Instance.new("Frame")
-    Frame.Size = UDim2.new(0, 45, 0, 45)
-    Frame.Position = UDim2.new(0.5, -22, 0, 10)
-    Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    Frame.BackgroundTransparency = 0.3
-    Frame.BorderSizePixel = 0
-    Frame.Parent = ScreenGui
-    Frame.Active = true
-    Frame.ZIndex = 10  -- High ZIndex to capture touches
+    -- The draggable button itself
+    Button = Instance.new("TextButton")
+    Button.Size = UDim2.new(0, 45, 0, 45)
+    Button.Position = UDim2.new(0.5, -22, 0, 10)
+    Button.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+    Button.Text = "🔫"
+    Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Button.Font = Enum.Font.GothamBold
+    Button.TextSize = 24
+    Button.Parent = ScreenGui
+    Button.ZIndex = 10
+    Button.Active = true
+    Button.AutoButtonColor = false
     
-    -- Shoot Button
-    ShootButton = Instance.new("TextButton")
-    ShootButton.Size = UDim2.new(1, 0, 1, 0)
-    ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-    ShootButton.Text = "🔫"
-    ShootButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    ShootButton.Font = Enum.Font.GothamBold
-    ShootButton.TextSize = 24
-    ShootButton.Parent = Frame
-    ShootButton.ZIndex = 10
-    
-    -- UI Styling
+    -- Styling
     local UICorner = Instance.new("UICorner")
     UICorner.CornerRadius = UDim.new(0, 8)
-    UICorner.Parent = Frame
+    UICorner.Parent = Button
     
     local UIStroke = Instance.new("UIStroke")
     UIStroke.Color = Color3.fromRGB(255, 255, 255)
     UIStroke.Thickness = 1.5
-    UIStroke.Parent = Frame
+    UIStroke.Parent = Button
     
-    local ButtonCorner = Instance.new("UICorner")
-    ButtonCorner.CornerRadius = UDim.new(0, 8)
-    ButtonCorner.Parent = ShootButton
-    
-    -- =====================
-    -- IMPROVED DRAGGING FOR MOBILE
-    -- =====================
-    local dragConnection = nil
-    local isDragging = false
-    local dragStartPos = nil
-    local frameStartPos = nil
-    local DRAG_THRESHOLD = 10  -- pixels, prevents accidental drag when tapping to shoot
-    
-    local function startDrag(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
+    -- === Dragging Logic ===
+    Button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
             isDragging = true
             dragStartPos = input.Position
-            frameStartPos = Frame.Position
+            buttonStartPos = Button.Position
             
-            -- Connect to TouchMoved
-            if dragConnection then dragConnection:Disconnect() end
-            dragConnection = UserInputService.TouchMoved:Connect(function(touchInput)
-                if isDragging and touchInput == input then
-                    local delta = touchInput.Position - dragStartPos
-                    if delta.Magnitude > DRAG_THRESHOLD then
-                        Frame.Position = UDim2.new(
-                            frameStartPos.X.Scale,
-                            frameStartPos.X.Offset + delta.X,
-                            frameStartPos.Y.Scale,
-                            frameStartPos.Y.Offset + delta.Y
-                        )
-                    end
+            -- Track movement
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    isDragging = false
                 end
             end)
-        end
-    end
-    
-    local function stopDrag(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            isDragging = false
-            if dragConnection then
-                dragConnection:Disconnect()
-                dragConnection = nil
-            end
-        end
-    end
-    
-    -- Use InputBegan/Ended on the Frame for touch
-    Frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            startDrag(input)
-        end
-    end)
-    
-    Frame.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch then
-            stopDrag(input)
-        end
-    end)
-    
-    -- Also handle mouse dragging for PC
-    Frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            startDrag(input)
-        end
-    end)
-    
-    Frame.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            stopDrag(input)
         end
     end)
     
     UserInputService.InputChanged:Connect(function(input)
-        if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        if isDragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
             local delta = input.Position - dragStartPos
-            if delta.Magnitude > DRAG_THRESHOLD then
-                Frame.Position = UDim2.new(
-                    frameStartPos.X.Scale,
-                    frameStartPos.X.Offset + delta.X,
-                    frameStartPos.Y.Scale,
-                    frameStartPos.Y.Offset + delta.Y
+            if delta.Magnitude > dragThreshold then
+                Button.Position = UDim2.new(
+                    buttonStartPos.X.Scale,
+                    buttonStartPos.X.Offset + delta.X,
+                    buttonStartPos.Y.Scale,
+                    buttonStartPos.Y.Offset + delta.Y
                 )
             end
         end
     end)
     
-    -- =====================
-    -- SHOOTING FUNCTIONALITY
-    -- =====================
-    ShootButton.MouseButton1Click:Connect(function()
-        if not isDragging then  -- Only shoot if we didn't just drag
+    -- === Shooting Logic ===
+    Button.MouseButton1Click:Connect(function()
+        -- Only shoot if we didn't drag significantly
+        if not isDragging or (dragStartPos and (UserInputService:GetMouseLocation() - dragStartPos).Magnitude <= dragThreshold) then
             attemptShot()
         end
     end)
     
-    ShootButton.TouchTap:Connect(function()
+    -- For mobile, use Activated event (fires on release) with same logic
+    Button.Activated:Connect(function()
         if not isDragging then
             attemptShot()
         end
@@ -169,11 +107,11 @@ local function createGUI()
     -- Reset state
     canShoot = true
     lastShotTime = 0
-    ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-    ShootButton.Text = "🔫"
+    Button.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+    Button.Text = "🔫"
 end
 
--- Helper Functions (unchanged, condensed for brevity)
+-- === Weapon and Combat Functions (unchanged) ===
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
@@ -207,8 +145,7 @@ local function hasClearLineOfSight(targetPlayer)
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {char, tChar}
     params.IgnoreWater = true
-    local result = Workspace:Raycast(startPos, dir * dist, params)
-    return result == nil
+    return workspace:Raycast(startPos, dir * dist, params) == nil
 end
 
 local function getNearestVisibleEnemy()
@@ -216,8 +153,7 @@ local function getNearestVisibleEnemy()
     if not char then return nil end
     local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
     if not myRoot then return nil end
-    local nearest = nil
-    local minDist = math.huge
+    local nearest, minDist = nil, math.huge
     for _, other in pairs(Players:GetPlayers()) do
         if other ~= player and other.Character then
             local oChar = other.Character
@@ -251,26 +187,26 @@ local function shootEnemy(targetPlayer)
     local startPos = handle.Position
     local hitPos = tRoot.Position
     
-    -- Client beam
+    -- Local beam
     local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
     if localBeam then pcall(function() localBeam:Fire(handle, hitPos) end) end
     
-    -- Fire remote
+    -- Fire
     local fireRemote = weapon:FindFirstChild("fire")
     if fireRemote then pcall(function() fireRemote:FireServer() end) end
     
-    -- showBeam (hit, start, handle)
+    -- ShowBeam (correct order: hit, start, handle)
     local beamRemote = weapon:FindFirstChild("showBeam")
     if beamRemote then pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end) end
     
-    -- Kill remote
+    -- Kill
     local killRemote = weapon:FindFirstChild("kill")
     if killRemote then
         local dir = (hitPos - startPos).Unit
         pcall(function() killRemote:FireServer(targetPlayer, dir) end)
     end
     
-    -- Optional Killed
+    -- Optional
     pcall(function()
         local killed = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
         if killed then killed:FireServer(targetPlayer) end
@@ -281,13 +217,13 @@ end
 local function startCooldown()
     canShoot = false
     lastShotTime = tick()
-    ShootButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-    ShootButton.Text = "⏳"
+    Button.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    Button.Text = "⏳"
     task.spawn(function()
         while tick() - lastShotTime < cooldownTime do task.wait(0.1) end
         canShoot = true
-        ShootButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
-        ShootButton.Text = "🔫"
+        Button.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+        Button.Text = "🔫"
     end)
 end
 
@@ -301,7 +237,7 @@ function attemptShot()
 end
 
 -- Respawn handling
-player.CharacterAdded:Connect(function(char)
+player.CharacterAdded:Connect(function()
     task.wait(0.1)
     createGUI()
 end)
@@ -313,4 +249,4 @@ else
     createGUI()
 end
 
-print("One-Shot Aimbot Loaded - Mobile Dragging Fixed!")
+print("Aimbot Loaded – Dragging fixed for mobile!")
