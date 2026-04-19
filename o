@@ -1,5 +1,5 @@
 -- One-Shot Aimbot for Duels: Murderers vs Sheriffs
--- Hollow circle button, robust two-finger drag, position memory
+-- Stable drag + position memory + visible hollow circle
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -21,10 +21,10 @@ local Button = nil
 -- Position memory
 local savedPosition = UDim2.new(0.5, -30, 0, 10)  -- 60px button
 
--- Drag state
-local activeTouch = nil  -- The touch currently dragging the button
+-- Dragging state
+local isDragging = false
 local dragOffset = Vector2.zero
-local dragThreshold = 10
+local dragThreshold = 8
 
 -- Cache
 local camera = Workspace.CurrentCamera
@@ -32,17 +32,10 @@ local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstCh
 local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
 
 -- Clamp to screen
-local function clampToScreen(position)
+local function clampToScreen(guiObject, position)
     local screenSize = camera.ViewportSize
-    local buttonSize = Button.AbsoluteSize
+    local buttonSize = guiObject.AbsoluteSize
     return UDim2.new(0, math.clamp(position.X.Offset, 0, screenSize.X - buttonSize.X), 0, math.clamp(position.Y.Offset, 0, screenSize.Y - buttonSize.Y))
-end
-
--- Check if a position is inside the button
-local function isTouchOnButton(touchPos)
-    local btnPos = Button.AbsolutePosition
-    local btnSize = Button.AbsoluteSize
-    return touchPos.X >= btnPos.X and touchPos.X <= btnPos.X + btnSize.X and touchPos.Y >= btnPos.Y and touchPos.Y <= btnPos.Y + btnSize.Y
 end
 
 -- Create GUI
@@ -58,14 +51,13 @@ local function createGUI()
     ScreenGui.IgnoreGuiInset = true
     ScreenGui.ResetOnSpawn = false
     
-    -- Hollow circle button (60x60)
+    -- Circular button (60x60) with blur and semi-transparency
     Button = Instance.new("TextButton")
     Button.Size = UDim2.new(0, 60, 0, 60)
     Button.Position = savedPosition
     Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Button.BackgroundTransparency = 0.9  -- Almost fully transparent
+    Button.BackgroundTransparency = 0.6  -- Visible but translucent
     Button.Text = ""  -- No icon
-    Button.TextColor3 = Color3.fromRGB(255, 255, 255)
     Button.Font = Enum.Font.GothamBold
     Button.TextSize = 0
     Button.Parent = ScreenGui
@@ -74,112 +66,73 @@ local function createGUI()
     Button.AutoButtonColor = false
     Button.BorderSizePixel = 0
     
-    -- Circular outline
+    -- Rounded corners (fully round)
     local corner = Instance.new("UICorner", Button)
-    corner.CornerRadius = UDim.new(1, 0)  -- Fully round
+    corner.CornerRadius = UDim.new(1, 0)
     
+    -- White outline
     local stroke = Instance.new("UIStroke", Button)
-    stroke.Thickness = 2.5
+    stroke.Thickness = 2
     stroke.Color = Color3.fromRGB(255, 255, 255)
-    stroke.Transparency = 0.2
-    stroke.LineJoinMode = Enum.LineJoinMode.Round
+    stroke.Transparency = 0.3
     
-    -- === ROBUST DRAGGING (Touch/Mouse) ===
-    local dragConnection = nil
+    -- Blur effect (makes background slightly blurred behind button)
+    local blur = Instance.new("UIBlurEffect", Button)
+    blur.Size = 5  -- Subtle blur
     
-    local function startDrag(input)
-        if activeTouch then return end  -- Already dragging
-        local pos = input.Position
-        if isTouchOnButton(pos) then
-            activeTouch = input
-            dragOffset = pos - Button.AbsolutePosition
+    -- === STABLE DRAGGING (proven method) ===
+    local function onDrag(input)
+        if not isDragging then return end
+        local currentPos = UserInputService:GetMouseLocation()
+        local newPos = UDim2.new(0, currentPos.X - dragOffset.X, 0, currentPos.Y - dragOffset.Y)
+        local clamped = clampToScreen(Button, newPos)
+        Button.Position = clamped
+        savedPosition = clamped  -- Save for respawn
+    end
+    
+    Button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local mousePos = UserInputService:GetMouseLocation()
+            local buttonPos = Button.AbsolutePosition
+            dragOffset = mousePos - buttonPos
+            isDragging = true
             
-            -- Start render loop
-            if dragConnection then dragConnection:Disconnect() end
-            dragConnection = RunService.RenderStepped:Connect(function()
-                if activeTouch then
-                    local currentPos = activeTouch.Position
-                    local newPos = UDim2.new(0, currentPos.X - dragOffset.X, 0, currentPos.Y - dragOffset.Y)
-                    local clamped = clampToScreen(newPos)
-                    Button.Position = clamped
-                    savedPosition = clamped
-                else
-                    dragConnection:Disconnect()
-                    dragConnection = nil
+            local connection
+            connection = UserInputService.InputChanged:Connect(function(changedInput)
+                if changedInput == input then
+                    onDrag(changedInput)
+                end
+            end)
+            
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    isDragging = false
+                    connection:Disconnect()
                 end
             end)
         end
-    end
-    
-    local function stopDrag(input)
-        if activeTouch == input then
-            activeTouch = nil
-        end
-    end
-    
-    -- Listen for all touches
-    UserInputService.TouchStarted:Connect(function(touch, gameProcessed)
-        -- Only handle if not already dragging and touch is on button
-        if not activeTouch and isTouchOnButton(touch.Position) then
-            startDrag(touch)
-        end
     end)
     
-    UserInputService.TouchMoved:Connect(function(touch)
-        -- If this touch is our active drag touch, movement is handled in RenderStepped
-    end)
-    
-    UserInputService.TouchEnded:Connect(function(touch)
-        stopDrag(touch)
-    end)
-    
-    -- Mouse support (PC)
+    -- === SHOOTING (tap only) ===
+    local dragStartPos = nil
     Button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            startDrag(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragStartPos = UserInputService:GetMouseLocation()
         end
     end)
     
-    Button.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            stopDrag(input)
+    local function tryShoot()
+        if not canShoot then return end
+        local endPos = UserInputService:GetMouseLocation()
+        if dragStartPos and (endPos - dragStartPos).Magnitude <= dragThreshold then
+            task.spawn(attemptShot)
         end
-    end)
+    end
     
-    UserInputService.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement and activeTouch == input then
-            -- Handled in RenderStepped
-        end
-    end)
+    Button.MouseButton1Click:Connect(tryShoot)
+    Button.TouchTap:Connect(tryShoot)
     
-    -- === SHOOTING (only on tap, not drag) ===
-    local tapStartPos = nil
-    local tapTouch = nil
-    
-    UserInputService.TouchStarted:Connect(function(touch, gameProcessed)
-        if isTouchOnButton(touch.Position) then
-            tapStartPos = touch.Position
-            tapTouch = touch
-        end
-    end)
-    
-    UserInputService.TouchEnded:Connect(function(touch)
-        if tapTouch == touch and tapStartPos then
-            local endPos = touch.Position
-            if (endPos - tapStartPos).Magnitude <= dragThreshold then
-                task.spawn(attemptShot)
-            end
-            tapStartPos = nil
-            tapTouch = nil
-        end
-    end)
-    
-    -- Mouse click
-    Button.MouseButton1Click:Connect(function()
-        task.spawn(attemptShot)
-    end)
-    
-    -- Reset visual state
+    -- Reset visuals
     canShoot = true
     lastShotTime = 0
     stroke.Color = Color3.fromRGB(255, 255, 255)
@@ -283,14 +236,12 @@ end
 local function startCooldown()
     canShoot = false
     lastShotTime = tick()
-    -- Change stroke color to gray during cooldown
+    -- Change outline to gray during cooldown
     local stroke = Button:FindFirstChildOfClass("UIStroke")
     if stroke then stroke.Color = Color3.fromRGB(150, 150, 150) end
     
     task.spawn(function()
-        while tick() - lastShotTime < cooldownTime do
-            task.wait(0.1)
-        end
+        while tick() - lastShotTime < cooldownTime do task.wait(0.1) end
         canShoot = true
         if stroke then stroke.Color = Color3.fromRGB(255, 255, 255) end
     end)
@@ -298,6 +249,7 @@ end
 
 function attemptShot()
     if not canShoot then return end
+    if not getWeapon() then return end
     local target = getNearestVisibleEnemy()
     if target and shootEnemy(target) then
         startCooldown()
@@ -318,4 +270,4 @@ else
     createGUI()
 end
 
-print("Aimbot Loaded – Hollow circle, two-finger drag ready!")
+print("Aimbot Loaded – Visible hollow circle, stable drag, position saved!")
