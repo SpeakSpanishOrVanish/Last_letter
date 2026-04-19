@@ -1,5 +1,5 @@
 -- One-Shot Aimbot for Duels: Murderers vs Sheriffs
--- Stable drag + position memory + visible hollow circle
+-- Stable drag + position memory + visible hollow circle (no blur errors)
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -18,7 +18,7 @@ local canShoot = true
 local ScreenGui = nil
 local Button = nil
 
--- Position memory
+-- Position memory (saved across respawns)
 local savedPosition = UDim2.new(0.5, -30, 0, 10)  -- 60px button
 
 -- Dragging state
@@ -51,12 +51,12 @@ local function createGUI()
     ScreenGui.IgnoreGuiInset = true
     ScreenGui.ResetOnSpawn = false
     
-    -- Circular button (60x60) with blur and semi-transparency
+    -- Hollow circle button (60x60)
     Button = Instance.new("TextButton")
     Button.Size = UDim2.new(0, 60, 0, 60)
     Button.Position = savedPosition
     Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Button.BackgroundTransparency = 0.6  -- Visible but translucent
+    Button.BackgroundTransparency = 0.5  -- Visible but see-through
     Button.Text = ""  -- No icon
     Button.Font = Enum.Font.GothamBold
     Button.TextSize = 0
@@ -66,28 +66,28 @@ local function createGUI()
     Button.AutoButtonColor = false
     Button.BorderSizePixel = 0
     
-    -- Rounded corners (fully round)
+    -- Rounded corners (fully circular)
     local corner = Instance.new("UICorner", Button)
     corner.CornerRadius = UDim.new(1, 0)
     
     -- White outline
     local stroke = Instance.new("UIStroke", Button)
-    stroke.Thickness = 2
+    stroke.Thickness = 2.5
     stroke.Color = Color3.fromRGB(255, 255, 255)
-    stroke.Transparency = 0.3
+    stroke.Transparency = 0.2
     
-    -- Blur effect (makes background slightly blurred behind button)
-    local blur = Instance.new("UIBlurEffect", Button)
-    blur.Size = 5  -- Subtle blur
-    
-    -- === STABLE DRAGGING (proven method) ===
+    -- === PROVEN STABLE DRAGGING (from working version) ===
     local function onDrag(input)
         if not isDragging then return end
+        
         local currentPos = UserInputService:GetMouseLocation()
-        local newPos = UDim2.new(0, currentPos.X - dragOffset.X, 0, currentPos.Y - dragOffset.Y)
-        local clamped = clampToScreen(Button, newPos)
+        local newX = currentPos.X - dragOffset.X
+        local newY = currentPos.Y - dragOffset.Y
+        
+        local newPosition = UDim2.new(0, newX, 0, newY)
+        local clamped = clampToScreen(Button, newPosition)
         Button.Position = clamped
-        savedPosition = clamped  -- Save for respawn
+        savedPosition = clamped  -- Save position for respawn
     end
     
     Button.InputBegan:Connect(function(input)
@@ -97,6 +97,7 @@ local function createGUI()
             dragOffset = mousePos - buttonPos
             isDragging = true
             
+            -- Connect to InputChanged for movement
             local connection
             connection = UserInputService.InputChanged:Connect(function(changedInput)
                 if changedInput == input then
@@ -104,6 +105,7 @@ local function createGUI()
                 end
             end)
             
+            -- Cleanup on release
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     isDragging = false
@@ -138,7 +140,7 @@ local function createGUI()
     stroke.Color = Color3.fromRGB(255, 255, 255)
 end
 
--- === Weapon & Combat (unchanged) ===
+-- === Weapon & Combat Functions ===
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
@@ -164,13 +166,15 @@ local function hasClearLineOfSight(targetPlayer)
     local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
     local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso")
     if not myRoot or not tRoot then return false end
-    local dir = (tRoot.Position - myRoot.Position).Unit
-    local dist = (tRoot.Position - myRoot.Position).Magnitude
+    local startPos = myRoot.Position
+    local endPos = tRoot.Position
+    local dir = (endPos - startPos).Unit
+    local dist = (endPos - startPos).Magnitude
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {char, tChar}
     params.IgnoreWater = true
-    return workspace:Raycast(myRoot.Position, dir * dist, params) == nil
+    return workspace:Raycast(startPos, dir * dist, params) == nil
 end
 
 local function getNearestVisibleEnemy()
@@ -199,15 +203,13 @@ local function getNearestVisibleEnemy()
 end
 
 local function shootEnemy(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then return false end
     local char = player.Character
-    if not char or not targetPlayer.Character then return false end
-    
+    if not char then return false end
     local weapon = getWeapon()
     if not weapon then return false end
-    
     local handle = weapon:FindFirstChild("Handle")
     if not handle then return false end
-    
     local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
     if not tRoot then return false end
     
@@ -236,7 +238,7 @@ end
 local function startCooldown()
     canShoot = false
     lastShotTime = tick()
-    -- Change outline to gray during cooldown
+    -- Outline turns gray
     local stroke = Button:FindFirstChildOfClass("UIStroke")
     if stroke then stroke.Color = Color3.fromRGB(150, 150, 150) end
     
@@ -270,4 +272,4 @@ else
     createGUI()
 end
 
-print("Aimbot Loaded – Visible hollow circle, stable drag, position saved!")
+print("Aimbot Loaded – Stable drag, position saved, visible circle!")
