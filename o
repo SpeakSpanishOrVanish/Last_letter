@@ -1,5 +1,5 @@
 -- One-Shot Aimbot for Duels: Murderers vs Sheriffs
--- Smooth drag + instant shot + position memory + hollow design
+-- Stable drag + position memory + hollow dot design
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -18,20 +18,20 @@ local canShoot = true
 local ScreenGui = nil
 local Button = nil
 
--- Position memory (saved across respawns)
-local savedPosition = UDim2.new(0.5, -22, 0, 10)  -- default
+-- Position memory
+local savedPosition = UDim2.new(0.5, -27, 0, 10)  -- centered for 55px width
 
 -- Dragging state
 local isDragging = false
 local dragOffset = Vector2.zero
-local dragThreshold = 5
+local dragThreshold = 8  -- slightly higher to avoid accidental shots
 
--- Cache for performance
+-- Cache
 local camera = Workspace.CurrentCamera
 local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
 local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
 
--- Clamp function
+-- Clamp to screen
 local function clampToScreen(position)
     local screenSize = camera.ViewportSize
     local buttonSize = Button.AbsoluteSize
@@ -51,29 +51,27 @@ local function createGUI()
     ScreenGui.IgnoreGuiInset = true
     
     Button = Instance.new("TextButton")
-    Button.Size = UDim2.new(0, 45, 0, 45)
-    Button.Position = savedPosition  -- Use saved position
+    Button.Size = UDim2.new(0, 55, 0, 55)  -- Bigger
+    Button.Position = savedPosition
     Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Button.BackgroundTransparency = 0.85  -- Hollow/transparent look
-    Button.Text = "🔫"
+    Button.BackgroundTransparency = 0.85
+    Button.Text = "●"  -- Simple dot
     Button.TextColor3 = Color3.fromRGB(255, 255, 255)
     Button.Font = Enum.Font.GothamBold
-    Button.TextSize = 24
+    Button.TextSize = 32
     Button.Parent = ScreenGui
     Button.ZIndex = 10
     Button.Active = true
     Button.AutoButtonColor = false
     
-    -- Styling for hollow look
-    Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 8)
+    -- Hollow style
+    Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 12)
     local stroke = Instance.new("UIStroke", Button)
     stroke.Thickness = 2
     stroke.Color = Color3.fromRGB(255, 255, 255)
     stroke.Transparency = 0.3
     
-    -- === Smooth Dragging ===
-    local dragConnection = nil
-    
+    -- === Stable Dragging (fixed) ===
     Button.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
             local mousePos = UserInputService:GetMouseLocation()
@@ -81,20 +79,21 @@ local function createGUI()
             dragOffset = mousePos - buttonPos
             isDragging = true
             
-            if dragConnection then dragConnection:Disconnect() end
-            dragConnection = RunService.RenderStepped:Connect(function()
+            -- Use a single connection for movement
+            local moveConnection
+            moveConnection = RunService.RenderStepped:Connect(function()
                 if isDragging then
                     local currentPos = UserInputService:GetMouseLocation()
                     local newPos = UDim2.new(0, currentPos.X - dragOffset.X, 0, currentPos.Y - dragOffset.Y)
                     local clamped = clampToScreen(newPos)
                     Button.Position = clamped
-                    savedPosition = clamped  -- Update saved position
+                    savedPosition = clamped
                 else
-                    dragConnection:Disconnect()
-                    dragConnection = nil
+                    moveConnection:Disconnect()
                 end
             end)
             
+            -- Stop dragging when input ends
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     isDragging = false
@@ -103,7 +102,7 @@ local function createGUI()
         end
     end)
     
-    -- === Shooting ===
+    -- === Shooting (only on tap, not drag) ===
     local dragStartPos = nil
     Button.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -122,14 +121,14 @@ local function createGUI()
     Button.MouseButton1Click:Connect(tryShoot)
     Button.TouchTap:Connect(tryShoot)
     
-    -- Reset state visuals
+    -- Reset visuals
     canShoot = true
     lastShotTime = 0
     Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Button.Text = "🔫"
+    Button.Text = "●"
 end
 
--- === Weapon & Combat Functions (unchanged) ===
+-- === Weapon & Combat (unchanged) ===
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
@@ -228,7 +227,7 @@ local function startCooldown()
     canShoot = false
     lastShotTime = tick()
     Button.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
-    Button.Text = "⏳"
+    Button.Text = "○"  -- hollow circle during cooldown
     
     task.spawn(function()
         while tick() - lastShotTime < cooldownTime do
@@ -236,7 +235,7 @@ local function startCooldown()
         end
         canShoot = true
         Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        Button.Text = "🔫"
+        Button.Text = "●"
     end)
 end
 
@@ -248,7 +247,7 @@ function attemptShot()
     end
 end
 
--- Respawn handling
+-- Respawn
 player.CharacterAdded:Connect(function()
     task.wait(0.1)
     createGUI()
@@ -262,4 +261,4 @@ else
     createGUI()
 end
 
-print("Aimbot Loaded – Hollow design + position memory!")
+print("Aimbot Loaded – Bigger dot, stable drag, position memory!")
