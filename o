@@ -1,10 +1,11 @@
--- One-Shot Aimbot for Duels: Murderers vs Sheriffs (Mobile Dragging Fixed)
--- Ultra-compact button, smooth drag, persistent
+-- One-Shot Aimbot for Duels: Murderers vs Sheriffs
+-- Smooth dragging, no jumping, persistent
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -19,11 +20,23 @@ local Button = nil
 
 -- Dragging state
 local isDragging = false
-local dragStartPos = nil
-local buttonStartPos = nil
-local dragThreshold = 8  -- pixels moved before considered a drag
+local dragOffset = Vector2.new(0, 0)  -- offset from button center to touch point
+local dragThreshold = 5  -- pixels moved before considering a drag
 
--- Function to create GUI
+-- Function to clamp button to screen
+local function clampToScreen(guiObject, position)
+    local screenSize = Workspace.CurrentCamera.ViewportSize
+    local buttonSize = guiObject.AbsoluteSize
+    
+    local minX = 0
+    local maxX = screenSize.X - buttonSize.X
+    local minY = 0
+    local maxY = screenSize.Y - buttonSize.Y
+    
+    return UDim2.new(0, math.clamp(position.X.Offset, minX, maxX), 0, math.clamp(position.Y.Offset, minY, maxY))
+end
+
+-- Create GUI
 local function createGUI()
     if ScreenGui then ScreenGui:Destroy() end
     
@@ -33,9 +46,8 @@ local function createGUI()
     ScreenGui.Name = "OneShotAimbotGUI"
     ScreenGui.Parent = playerGui
     ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.IgnoreGuiInset = true  -- Prevents screen notch issues
+    ScreenGui.IgnoreGuiInset = true
     
-    -- The draggable button itself
     Button = Instance.new("TextButton")
     Button.Size = UDim2.new(0, 45, 0, 45)
     Button.Position = UDim2.new(0.5, -22, 0, 10)
@@ -50,56 +62,64 @@ local function createGUI()
     Button.AutoButtonColor = false
     
     -- Styling
-    local UICorner = Instance.new("UICorner")
-    UICorner.CornerRadius = UDim.new(0, 8)
-    UICorner.Parent = Button
+    Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 8)
+    Instance.new("UIStroke", Button).Thickness = 1.5
     
-    local UIStroke = Instance.new("UIStroke")
-    UIStroke.Color = Color3.fromRGB(255, 255, 255)
-    UIStroke.Thickness = 1.5
-    UIStroke.Parent = Button
+    -- === Smooth Dragging ===
+    local function onDrag(input)
+        if not isDragging then return end
+        
+        local currentPos = UserInputService:GetMouseLocation()
+        local newX = currentPos.X - dragOffset.X
+        local newY = currentPos.Y - dragOffset.Y
+        
+        local newPosition = UDim2.new(0, newX, 0, newY)
+        Button.Position = clampToScreen(Button, newPosition)
+    end
     
-    -- === Dragging Logic ===
     Button.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local mousePos = UserInputService:GetMouseLocation()
+            local buttonPos = Button.AbsolutePosition
+            dragOffset = mousePos - buttonPos
             isDragging = true
-            dragStartPos = input.Position
-            buttonStartPos = Button.Position
             
-            -- Track movement
+            -- Connect to InputChanged for movement
+            local connection
+            connection = UserInputService.InputChanged:Connect(function(changedInput)
+                if changedInput == input then
+                    onDrag(changedInput)
+                end
+            end)
+            
+            -- Cleanup on release
             input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     isDragging = false
+                    connection:Disconnect()
                 end
             end)
         end
     end)
     
-    UserInputService.InputChanged:Connect(function(input)
-        if isDragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-            local delta = input.Position - dragStartPos
-            if delta.Magnitude > dragThreshold then
-                Button.Position = UDim2.new(
-                    buttonStartPos.X.Scale,
-                    buttonStartPos.X.Offset + delta.X,
-                    buttonStartPos.Y.Scale,
-                    buttonStartPos.Y.Offset + delta.Y
-                )
-            end
+    -- === Shooting Logic ===
+    local dragStartPos = nil
+    Button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragStartPos = UserInputService:GetMouseLocation()
         end
     end)
     
-    -- === Shooting Logic ===
     Button.MouseButton1Click:Connect(function()
-        -- Only shoot if we didn't drag significantly
-        if not isDragging or (dragStartPos and (UserInputService:GetMouseLocation() - dragStartPos).Magnitude <= dragThreshold) then
+        local endPos = UserInputService:GetMouseLocation()
+        if not dragStartPos or (endPos - dragStartPos).Magnitude <= dragThreshold then
             attemptShot()
         end
     end)
     
-    -- For mobile, use Activated event (fires on release) with same logic
-    Button.Activated:Connect(function()
-        if not isDragging then
+    Button.TouchTap:Connect(function()
+        local endPos = UserInputService:GetMouseLocation()
+        if not dragStartPos or (endPos - dragStartPos).Magnitude <= dragThreshold then
             attemptShot()
         end
     end)
@@ -111,7 +131,7 @@ local function createGUI()
     Button.Text = "🔫"
 end
 
--- === Weapon and Combat Functions (unchanged) ===
+-- === Weapon & Combat Functions ===
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
@@ -195,7 +215,7 @@ local function shootEnemy(targetPlayer)
     local fireRemote = weapon:FindFirstChild("fire")
     if fireRemote then pcall(function() fireRemote:FireServer() end) end
     
-    -- ShowBeam (correct order: hit, start, handle)
+    -- ShowBeam (hit, start, handle)
     local beamRemote = weapon:FindFirstChild("showBeam")
     if beamRemote then pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end) end
     
@@ -206,7 +226,7 @@ local function shootEnemy(targetPlayer)
         pcall(function() killRemote:FireServer(targetPlayer, dir) end)
     end
     
-    -- Optional
+    -- Optional Killed
     pcall(function()
         local killed = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
         if killed then killed:FireServer(targetPlayer) end
@@ -249,4 +269,4 @@ else
     createGUI()
 end
 
-print("Aimbot Loaded – Dragging fixed for mobile!")
+print("Aimbot Loaded – Smooth dragging, no jumping!")
