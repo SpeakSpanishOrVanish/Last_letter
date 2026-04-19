@@ -1,5 +1,5 @@
--- One-Shot Aimbot with DEBUG MODE
--- Fixed right side, green/red tint, white outline
+-- One-Shot Aimbot for Duels: Murderers vs Sheriffs (FIXED)
+-- Fixed right side, green/red tint, white outline, no teammates
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -10,7 +10,7 @@ local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
 
 -- ===== DEBUG MODE =====
-local DEBUG = true  -- Set to false after fixing
+local DEBUG = true  -- Set to false after it works
 
 -- ===== Settings =====
 local cooldownTime = 2.5
@@ -26,10 +26,10 @@ local screenGui = nil
 local button = nil
 local stroke = nil
 
--- Cache
-local camera = Workspace.CurrentCamera
-local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
-local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
+-- Cache (initialized later when needed)
+local camera
+local localBeam
+local killedRemote
 
 local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
@@ -42,24 +42,126 @@ local function isValidTarget(otherPlayer)
 
     local myGame = player:GetAttribute("Game")
     local theirGame = otherPlayer:GetAttribute("Game")
-    if DEBUG then print("My Game:", myGame, "Their Game:", theirGame) end
     if myGame and theirGame and myGame ~= theirGame then
-        if DEBUG then print("Different game, skipping") end
+        if DEBUG then print("Different game, skipping", otherPlayer.Name) end
         return false
     end
 
     local myTeam = player:GetAttribute("Team")
     local theirTeam = otherPlayer:GetAttribute("Team")
-    if DEBUG then print("My Team:", myTeam, "Their Team:", theirTeam) end
     if myTeam and theirTeam and myTeam == theirTeam then
-        if DEBUG then print("Same team, skipping") end
+        if DEBUG then print("Same team, skipping", otherPlayer.Name) end
         return false
     end
 
     return true
 end
 
--- ===== Create GUI =====
+-- ===== Weapon & Combat Functions (defined early) =====
+local function getWeapon()
+    local char = player.Character
+    if not char then
+        if DEBUG then print("No character") end
+        return nil
+    end
+    for _, tool in pairs(char:GetChildren()) do
+        if tool:IsA("Tool") and tool:FindFirstChild("fire") then
+            return tool
+        end
+    end
+    local bp = player:FindFirstChild("Backpack")
+    if bp then
+        for _, tool in pairs(bp:GetChildren()) do
+            if tool:IsA("Tool") and tool:FindFirstChild("fire") then
+                -- Only equip if character exists and has a Humanoid
+                if char and char:FindFirstChild("Humanoid") then
+                    tool.Parent = char
+                end
+                return tool
+            end
+        end
+    end
+    if DEBUG then print("No weapon with 'fire' remote found") end
+    return nil
+end
+
+local function hasClearLineOfSight(targetPlayer)
+    local char = player.Character
+    local tChar = targetPlayer.Character
+    if not char or not tChar then return false end
+    local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+    local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso")
+    if not myRoot or not tRoot then return false end
+    local dir = (tRoot.Position - myRoot.Position).Unit
+    local dist = (tRoot.Position - myRoot.Position).Magnitude
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char, tChar}
+    params.IgnoreWater = true
+    local result = workspace:Raycast(myRoot.Position, dir * dist, params)
+    return result == nil
+end
+
+local function getNearestVisibleEnemy()
+    local char = player.Character
+    if not char then return nil end
+    local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
+    if not myRoot then return nil end
+
+    local nearest, minDist = nil, math.huge
+    for _, other in pairs(Players:GetPlayers()) do
+        if isValidTarget(other) then
+            local oChar = other.Character
+            local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
+            if oRoot then
+                local dist = (myRoot.Position - oRoot.Position).Magnitude
+                if dist < minDist and hasClearLineOfSight(other) then
+                    minDist = dist
+                    nearest = other
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function shootEnemy(targetPlayer)
+    if DEBUG then print("Shooting at", targetPlayer.Name) end
+    local char = player.Character
+    if not char then return false end
+    local weapon = getWeapon()
+    if not weapon then
+        if DEBUG then print("No weapon") end
+        return false
+    end
+    local handle = weapon:FindFirstChild("Handle")
+    if not handle then
+        if DEBUG then print("No Handle") end
+        return false
+    end
+    local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
+    if not tRoot then return false end
+
+    local startPos = handle.Position
+    local hitPos = tRoot.Position
+
+    -- Fire all remotes
+    if localBeam then pcall(function() localBeam:Fire(handle, hitPos) end) end
+    local fireRemote = weapon:FindFirstChild("fire")
+    if fireRemote then pcall(function() fireRemote:FireServer() end) end
+    local beamRemote = weapon:FindFirstChild("showBeam")
+    if beamRemote then pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end) end
+    local killRemote = weapon:FindFirstChild("kill")
+    if killRemote then
+        local dir = (hitPos - startPos).Unit
+        pcall(function() killRemote:FireServer(targetPlayer, dir) end)
+    end
+    if killedRemote then pcall(function() killedRemote:FireServer(targetPlayer) end) end
+
+    return true
+end
+
+-- ===== Create GUI (after functions are defined) =====
 local function createGUI()
     if screenGui then screenGui:Destroy() end
 
@@ -73,7 +175,6 @@ local function createGUI()
     screenGui.Parent = playerGui
 
     local shadow = Instance.new("Frame")
-    shadow.Name = "Shadow"
     shadow.Size = UDim2.new(0, 76, 0, 76)
     shadow.AnchorPoint = Vector2.new(1, 1)
     shadow.Position = UDim2.new(1, -20, 1, -180)
@@ -85,7 +186,6 @@ local function createGUI()
     Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 16)
 
     button = Instance.new("TextButton")
-    button.Name = "ShootButton"
     button.Size = UDim2.new(0, 70, 0, 70)
     button.AnchorPoint = Vector2.new(1, 1)
     button.Position = UDim2.new(1, -23, 1, -183)
@@ -118,19 +218,24 @@ local function createGUI()
             return
         end
 
+        -- Ensure character and humanoid exist
+        local char = player.Character
+        if not char or not char:FindFirstChild("Humanoid") then
+            if DEBUG then print("Character not ready") end
+            return
+        end
+
         local weapon = getWeapon()
         if not weapon then
             if DEBUG then print("No weapon found") end
             return
         end
-        if DEBUG then print("Weapon:", weapon.Name) end
 
         local target = getNearestVisibleEnemy()
         if not target then
             if DEBUG then print("No valid target") end
             return
         end
-        if DEBUG then print("Target:", target.Name) end
 
         if shootEnemy(target) then
             canShoot = false
@@ -142,7 +247,7 @@ local function createGUI()
                 setButtonState(true)
             end)
         else
-            if DEBUG then print("ShootEnemy returned false") end
+            if DEBUG then print("shootEnemy failed") end
         end
     end
 
@@ -154,129 +259,15 @@ local function createGUI()
     setButtonState(true)
 end
 
--- ===== Weapon & Combat =====
-local function getWeapon()
-    local char = player.Character
-    if not char then return nil end
-    for _, tool in pairs(char:GetChildren()) do
-        if tool:IsA("Tool") and tool:FindFirstChild("fire") then
-            return tool
-        end
-    end
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        for _, tool in pairs(bp:GetChildren()) do
-            if tool:IsA("Tool") and tool:FindFirstChild("fire") then
-                tool.Parent = char
-                return tool
-            end
-        end
-    end
-    return nil
-end
+-- ===== Initialize =====
+camera = Workspace.CurrentCamera
+localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
+killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
 
-local function hasClearLineOfSight(targetPlayer)
-    local char = player.Character
-    local tChar = targetPlayer.Character
-    if not char or not tChar then return false end
-    local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
-    local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso")
-    if not myRoot or not tRoot then return false end
-    local dir = (tRoot.Position - myRoot.Position).Unit
-    local dist = (tRoot.Position - myRoot.Position).Magnitude
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char, tChar}
-    params.IgnoreWater = true
-    local result = workspace:Raycast(myRoot.Position, dir * dist, params)
-    if DEBUG then print("Line of sight:", result == nil) end
-    return result == nil
-end
-
-local function getNearestVisibleEnemy()
-    local char = player.Character
-    if not char then return nil end
-    local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
-    if not myRoot then return nil end
-
-    local nearest, minDist = nil, math.huge
-    for _, other in pairs(Players:GetPlayers()) do
-        if isValidTarget(other) then
-            local oChar = other.Character
-            local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
-            if oRoot then
-                local dist = (myRoot.Position - oRoot.Position).Magnitude
-                if DEBUG then print("Checking", other.Name, "Dist:", dist) end
-                if dist < minDist and hasClearLineOfSight(other) then
-                    minDist = dist
-                    nearest = other
-                end
-            end
-        end
-    end
-    return nearest
-end
-
-local function shootEnemy(targetPlayer)
-    if DEBUG then print("Shooting at", targetPlayer.Name) end
-    local char = player.Character
-    if not char then return false end
-    local weapon = getWeapon()
-    if not weapon then return false end
-    local handle = weapon:FindFirstChild("Handle")
-    if not handle then
-        if DEBUG then print("No Handle in weapon") end
-        return false
-    end
-    local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
-    if not tRoot then return false end
-
-    local startPos = handle.Position
-    local hitPos = tRoot.Position
-
-    if localBeam then
-        pcall(function() localBeam:Fire(handle, hitPos) end)
-        if DEBUG then print("LocalBeam fired") end
-    end
-
-    local fireRemote = weapon:FindFirstChild("fire")
-    if fireRemote then
-        pcall(function() fireRemote:FireServer() end)
-        if DEBUG then print("fire remote fired") end
-    else
-        if DEBUG then print("No fire remote") end
-    end
-
-    local beamRemote = weapon:FindFirstChild("showBeam")
-    if beamRemote then
-        pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end)
-        if DEBUG then print("showBeam remote fired") end
-    else
-        if DEBUG then print("No showBeam remote") end
-    end
-
-    local killRemote = weapon:FindFirstChild("kill")
-    if killRemote then
-        local dir = (hitPos - startPos).Unit
-        pcall(function() killRemote:FireServer(targetPlayer, dir) end)
-        if DEBUG then print("kill remote fired") end
-    else
-        if DEBUG then print("No kill remote") end
-    end
-
-    if killedRemote then
-        pcall(function() killedRemote:FireServer(targetPlayer) end)
-        if DEBUG then print("Killed remote fired") end
-    end
-
-    return true
-end
-
--- ===== Respawn =====
+-- Respawn handling
 player.CharacterAdded:Connect(function()
     task.wait(0.1)
     createGUI()
-    camera = Workspace.CurrentCamera
 end)
 
 if player.Character then
@@ -286,4 +277,4 @@ else
     createGUI()
 end
 
-print("DEBUG Aimbot loaded – Check console output")
+print("Aimbot loaded – DEBUG mode active")
