@@ -1,5 +1,5 @@
 -- One-Shot Aimbot for Duels: Murderers vs Sheriffs
--- Stable drag + position memory + visible hollow circle (no blur errors)
+-- Stable drag + position memory + rounded square with white outline
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -51,12 +51,12 @@ local function createGUI()
     ScreenGui.IgnoreGuiInset = true
     ScreenGui.ResetOnSpawn = false
     
-    -- Hollow circle button (60x60)
+    -- Rounded square button (60x60)
     Button = Instance.new("TextButton")
     Button.Size = UDim2.new(0, 60, 0, 60)
     Button.Position = savedPosition
     Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Button.BackgroundTransparency = 0.5  -- Visible but see-through
+    Button.BackgroundTransparency = 0.5  -- Semi-transparent
     Button.Text = ""  -- No icon
     Button.Font = Enum.Font.GothamBold
     Button.TextSize = 0
@@ -66,9 +66,9 @@ local function createGUI()
     Button.AutoButtonColor = false
     Button.BorderSizePixel = 0
     
-    -- Rounded corners (fully circular)
+    -- Rounded corners (square with rounded edges)
     local corner = Instance.new("UICorner", Button)
-    corner.CornerRadius = UDim.new(1, 0)
+    corner.CornerRadius = UDim.new(0, 12)  -- Rounded, not fully circular
     
     -- White outline
     local stroke = Instance.new("UIStroke", Button)
@@ -76,7 +76,7 @@ local function createGUI()
     stroke.Color = Color3.fromRGB(255, 255, 255)
     stroke.Transparency = 0.2
     
-    -- === PROVEN STABLE DRAGGING (from working version) ===
+    -- === PROVEN STABLE DRAGGING ===
     local function onDrag(input)
         if not isDragging then return end
         
@@ -140,7 +140,7 @@ local function createGUI()
     stroke.Color = Color3.fromRGB(255, 255, 255)
 end
 
--- === Weapon & Combat Functions ===
+-- === Weapon & Combat Functions (unchanged) ===
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
@@ -238,7 +238,7 @@ end
 local function startCooldown()
     canShoot = false
     lastShotTime = tick()
-    -- Outline turns gray
+    -- Outline turns gray during cooldown
     local stroke = Button:FindFirstChildOfClass("UIStroke")
     if stroke then stroke.Color = Color3.fromRGB(150, 150, 150) end
     
@@ -272,4 +272,4 @@ else
     createGUI()
 end
 
-print("Aimbot Loaded – Stable drag, position saved, visible circle!")
+print("Aimbot Loaded – Rounded square, white outline, stable drag, position saved!")
