@@ -1,4 +1,4 @@
--- One-Shot Aimbot for Duels: Murderers vs Sheriffs (FIXED)
+-- Instant-Shot Aimbot for Duels: Murderers vs Sheriffs
 -- Fixed right side, green/red tint, white outline, no teammates
 
 local Players = game:GetService("Players")
@@ -8,9 +8,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
-
--- ===== DEBUG MODE =====
-local DEBUG = true  -- Set to false after it works
 
 -- ===== Settings =====
 local cooldownTime = 2.5
@@ -26,14 +23,14 @@ local screenGui = nil
 local button = nil
 local stroke = nil
 
--- Cache (initialized later when needed)
-local camera
-local localBeam
-local killedRemote
+-- Cache
+local camera = Workspace.CurrentCamera
+local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
+local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
 
 local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
--- ===== Team Check =====
+-- ===== Team Check (same as before) =====
 local function isValidTarget(otherPlayer)
     if not otherPlayer or otherPlayer == player then return false end
     if not otherPlayer.Character then return false end
@@ -43,27 +40,22 @@ local function isValidTarget(otherPlayer)
     local myGame = player:GetAttribute("Game")
     local theirGame = otherPlayer:GetAttribute("Game")
     if myGame and theirGame and myGame ~= theirGame then
-        if DEBUG then print("Different game, skipping", otherPlayer.Name) end
         return false
     end
 
     local myTeam = player:GetAttribute("Team")
     local theirTeam = otherPlayer:GetAttribute("Team")
     if myTeam and theirTeam and myTeam == theirTeam then
-        if DEBUG then print("Same team, skipping", otherPlayer.Name) end
         return false
     end
 
     return true
 end
 
--- ===== Weapon & Combat Functions (defined early) =====
+-- ===== Weapon & Combat (optimized) =====
 local function getWeapon()
     local char = player.Character
-    if not char then
-        if DEBUG then print("No character") end
-        return nil
-    end
+    if not char then return nil end
     for _, tool in pairs(char:GetChildren()) do
         if tool:IsA("Tool") and tool:FindFirstChild("fire") then
             return tool
@@ -73,15 +65,11 @@ local function getWeapon()
     if bp then
         for _, tool in pairs(bp:GetChildren()) do
             if tool:IsA("Tool") and tool:FindFirstChild("fire") then
-                -- Only equip if character exists and has a Humanoid
-                if char and char:FindFirstChild("Humanoid") then
-                    tool.Parent = char
-                end
+                tool.Parent = char
                 return tool
             end
         end
     end
-    if DEBUG then print("No weapon with 'fire' remote found") end
     return nil
 end
 
@@ -98,8 +86,7 @@ local function hasClearLineOfSight(targetPlayer)
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {char, tChar}
     params.IgnoreWater = true
-    local result = workspace:Raycast(myRoot.Position, dir * dist, params)
-    return result == nil
+    return workspace:Raycast(myRoot.Position, dir * dist, params) == nil
 end
 
 local function getNearestVisibleEnemy()
@@ -111,8 +98,7 @@ local function getNearestVisibleEnemy()
     local nearest, minDist = nil, math.huge
     for _, other in pairs(Players:GetPlayers()) do
         if isValidTarget(other) then
-            local oChar = other.Character
-            local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
+            local oRoot = other.Character:FindFirstChild("HumanoidRootPart") or other.Character:FindFirstChild("Torso")
             if oRoot then
                 local dist = (myRoot.Position - oRoot.Position).Magnitude
                 if dist < minDist and hasClearLineOfSight(other) then
@@ -125,27 +111,21 @@ local function getNearestVisibleEnemy()
     return nearest
 end
 
+-- Shoot instantly – no task.spawn, no extra checks
 local function shootEnemy(targetPlayer)
-    if DEBUG then print("Shooting at", targetPlayer.Name) end
     local char = player.Character
     if not char then return false end
     local weapon = getWeapon()
-    if not weapon then
-        if DEBUG then print("No weapon") end
-        return false
-    end
+    if not weapon then return false end
     local handle = weapon:FindFirstChild("Handle")
-    if not handle then
-        if DEBUG then print("No Handle") end
-        return false
-    end
+    if not handle then return false end
     local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
     if not tRoot then return false end
 
     local startPos = handle.Position
     local hitPos = tRoot.Position
 
-    -- Fire all remotes
+    -- Fire all remotes immediately
     if localBeam then pcall(function() localBeam:Fire(handle, hitPos) end) end
     local fireRemote = weapon:FindFirstChild("fire")
     if fireRemote then pcall(function() fireRemote:FireServer() end) end
@@ -161,7 +141,7 @@ local function shootEnemy(targetPlayer)
     return true
 end
 
--- ===== Create GUI (after functions are defined) =====
+-- ===== Create GUI =====
 local function createGUI()
     if screenGui then screenGui:Destroy() end
 
@@ -205,66 +185,45 @@ local function createGUI()
     stroke.Thickness = 3.0
     stroke.LineJoinMode = Enum.LineJoinMode.Round
 
+    -- Button color update
     local function setButtonState(isReady)
         local targetColor = isReady and readyColor or cooldownColor
         local tween = TweenService:Create(button, tweenInfo, {BackgroundColor3 = targetColor})
         tween:Play()
     end
 
-    local function tryShoot()
-        if DEBUG then print("=== Try Shoot ===") end
-        if not canShoot then
-            if DEBUG then print("On cooldown") end
-            return
-        end
-
-        -- Ensure character and humanoid exist
-        local char = player.Character
-        if not char or not char:FindFirstChild("Humanoid") then
-            if DEBUG then print("Character not ready") end
-            return
-        end
-
-        local weapon = getWeapon()
-        if not weapon then
-            if DEBUG then print("No weapon found") end
-            return
-        end
+    -- === INSTANT SHOOT on press ===
+    local function instantShoot()
+        if not canShoot then return end
+        if not player.Character or not player.Character:FindFirstChild("Humanoid") then return end
+        if not getWeapon() then return end
 
         local target = getNearestVisibleEnemy()
-        if not target then
-            if DEBUG then print("No valid target") end
-            return
-        end
-
-        if shootEnemy(target) then
+        if target and shootEnemy(target) then
             canShoot = false
             lastShotTime = tick()
             setButtonState(false)
+            -- Cooldown timer runs in background
             task.spawn(function()
                 while tick() - lastShotTime < cooldownTime do task.wait(0.1) end
                 canShoot = true
                 setButtonState(true)
             end)
-        else
-            if DEBUG then print("shootEnemy failed") end
         end
     end
 
-    button.MouseButton1Click:Connect(tryShoot)
-    button.TouchTap:Connect(tryShoot)
+    -- Fire on press (MouseButton1Down) for instant reaction
+    button.MouseButton1Down:Connect(instantShoot)
+    -- For mobile, TouchTap is fine but let's also use TouchStarted for instant response
+    button.TouchStarted:Connect(instantShoot)
 
+    -- Initial ready state
     canShoot = true
     lastShotTime = 0
     setButtonState(true)
 end
 
 -- ===== Initialize =====
-camera = Workspace.CurrentCamera
-localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
-killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
-
--- Respawn handling
 player.CharacterAdded:Connect(function()
     task.wait(0.1)
     createGUI()
@@ -277,4 +236,4 @@ else
     createGUI()
 end
 
-print("Aimbot loaded – DEBUG mode active")
+print("Instant Aimbot loaded – shoots on press!")
