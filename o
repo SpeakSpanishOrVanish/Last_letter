@@ -1,146 +1,147 @@
 -- One-Shot Aimbot for Duels: Murderers vs Sheriffs
--- Stable drag + position memory + rounded square with white outline
+-- Fixed right side, green/red tint, white outline, NO TEAMMATES
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 
--- Settings
+-- ===== Settings =====
 local cooldownTime = 2.5
 local lastShotTime = 0
 local canShoot = true
 
--- GUI
-local ScreenGui = nil
-local Button = nil
+-- Colors
+local readyColor = Color3.fromRGB(0, 255, 0)   -- Green
+local cooldownColor = Color3.fromRGB(255, 0, 0) -- Red
 
--- Position memory (saved across respawns)
-local savedPosition = UDim2.new(0.5, -30, 0, 10)  -- 60px button
-
--- Dragging state
-local isDragging = false
-local dragOffset = Vector2.zero
-local dragThreshold = 8
+-- ===== GUI =====
+local screenGui = nil
+local button = nil
+local stroke = nil
 
 -- Cache
 local camera = Workspace.CurrentCamera
 local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
 local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
 
--- Clamp to screen
-local function clampToScreen(guiObject, position)
-    local screenSize = camera.ViewportSize
-    local buttonSize = guiObject.AbsoluteSize
-    return UDim2.new(0, math.clamp(position.X.Offset, 0, screenSize.X - buttonSize.X), 0, math.clamp(position.Y.Offset, 0, screenSize.Y - buttonSize.Y))
+-- Tween info
+local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- ===== Team Check =====
+local function isValidTarget(otherPlayer)
+    if not otherPlayer or otherPlayer == player then return false end
+    if not otherPlayer.Character then return false end
+    local hum = otherPlayer.Character:FindFirstChild("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+
+    -- Check Game attribute (must be same game)
+    local myGame = player:GetAttribute("Game")
+    local theirGame = otherPlayer:GetAttribute("Game")
+    if myGame and theirGame and myGame ~= theirGame then
+        return false
+    end
+
+    -- Check Team attribute (must be different team)
+    local myTeam = player:GetAttribute("Team")
+    local theirTeam = otherPlayer:GetAttribute("Team")
+    if myTeam and theirTeam and myTeam == theirTeam then
+        return false  -- Same team = teammate
+    end
+
+    return true
 end
 
--- Create GUI
+-- ===== Create GUI =====
 local function createGUI()
-    if ScreenGui then ScreenGui:Destroy() end
-    
+    if screenGui then screenGui:Destroy() end
+
     local playerGui = player:WaitForChild("PlayerGui")
-    
-    ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "OneShotAimbotGUI"
-    ScreenGui.Parent = playerGui
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.IgnoreGuiInset = true
-    ScreenGui.ResetOnSpawn = false
-    
-    -- Rounded square button (60x60)
-    Button = Instance.new("TextButton")
-    Button.Size = UDim2.new(0, 60, 0, 60)
-    Button.Position = savedPosition
-    Button.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Button.BackgroundTransparency = 0.5  -- Semi-transparent
-    Button.Text = ""  -- No icon
-    Button.Font = Enum.Font.GothamBold
-    Button.TextSize = 0
-    Button.Parent = ScreenGui
-    Button.ZIndex = 10
-    Button.Active = true
-    Button.AutoButtonColor = false
-    Button.BorderSizePixel = 0
-    
-    -- Rounded corners (square with rounded edges)
-    local corner = Instance.new("UICorner", Button)
-    corner.CornerRadius = UDim.new(0, 12)  -- Rounded, not fully circular
-    
+
+    screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AimbotButtonGui"
+    screenGui.ResetOnSpawn = false
+    screenGui.IgnoreGuiInset = true
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = playerGui
+
+    -- Soft shadow (optional)
+    local shadow = Instance.new("Frame")
+    shadow.Name = "Shadow"
+    shadow.Size = UDim2.new(0, 76, 0, 76)
+    shadow.AnchorPoint = Vector2.new(1, 1)
+    shadow.Position = UDim2.new(1, -20, 1, -180)
+    shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    shadow.BackgroundTransparency = 0.85
+    shadow.BorderSizePixel = 0
+    shadow.ZIndex = 9
+    shadow.Parent = screenGui
+    Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 16)
+
+    -- Main Button
+    button = Instance.new("TextButton")
+    button.Name = "ShootButton"
+    button.Size = UDim2.new(0, 70, 0, 70)
+    button.AnchorPoint = Vector2.new(1, 1)
+    button.Position = UDim2.new(1, -23, 1, -183)
+    button.BackgroundColor3 = readyColor
+    button.BackgroundTransparency = 0.85   -- See‑through
+    button.BorderSizePixel = 0
+    button.Text = ""                       -- No text
+    button.AutoButtonColor = false
+    button.ZIndex = 10
+    button.Parent = screenGui
+
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 14)
+
     -- White outline
-    local stroke = Instance.new("UIStroke", Button)
-    stroke.Thickness = 2.5
+    stroke = Instance.new("UIStroke", button)
     stroke.Color = Color3.fromRGB(255, 255, 255)
-    stroke.Transparency = 0.2
-    
-    -- === PROVEN STABLE DRAGGING ===
-    local function onDrag(input)
-        if not isDragging then return end
-        
-        local currentPos = UserInputService:GetMouseLocation()
-        local newX = currentPos.X - dragOffset.X
-        local newY = currentPos.Y - dragOffset.Y
-        
-        local newPosition = UDim2.new(0, newX, 0, newY)
-        local clamped = clampToScreen(Button, newPosition)
-        Button.Position = clamped
-        savedPosition = clamped  -- Save position for respawn
+    stroke.Transparency = 0.0
+    stroke.Thickness = 3.0
+    stroke.LineJoinMode = Enum.LineJoinMode.Round
+
+    -- Update button color
+    local function setButtonState(isReady)
+        local targetColor = isReady and readyColor or cooldownColor
+        local tween = TweenService:Create(button, tweenInfo, {BackgroundColor3 = targetColor})
+        tween:Play()
     end
-    
-    Button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            local mousePos = UserInputService:GetMouseLocation()
-            local buttonPos = Button.AbsolutePosition
-            dragOffset = mousePos - buttonPos
-            isDragging = true
-            
-            -- Connect to InputChanged for movement
-            local connection
-            connection = UserInputService.InputChanged:Connect(function(changedInput)
-                if changedInput == input then
-                    onDrag(changedInput)
-                end
-            end)
-            
-            -- Cleanup on release
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    isDragging = false
-                    connection:Disconnect()
-                end
-            end)
-        end
-    end)
-    
-    -- === SHOOTING (tap only) ===
-    local dragStartPos = nil
-    Button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragStartPos = UserInputService:GetMouseLocation()
-        end
-    end)
-    
+
+    -- Shooting logic
     local function tryShoot()
         if not canShoot then return end
-        local endPos = UserInputService:GetMouseLocation()
-        if dragStartPos and (endPos - dragStartPos).Magnitude <= dragThreshold then
-            task.spawn(attemptShot)
+        if not getWeapon() then return end
+
+        local target = getNearestVisibleEnemy()
+        if target and shootEnemy(target) then
+            canShoot = false
+            lastShotTime = tick()
+            setButtonState(false)  -- Red
+
+            task.spawn(function()
+                while tick() - lastShotTime < cooldownTime do
+                    task.wait(0.1)
+                end
+                canShoot = true
+                setButtonState(true)  -- Green
+            end)
         end
     end
-    
-    Button.MouseButton1Click:Connect(tryShoot)
-    Button.TouchTap:Connect(tryShoot)
-    
-    -- Reset visuals
+
+    button.MouseButton1Click:Connect(tryShoot)
+    button.TouchTap:Connect(tryShoot)
+
+    -- Ready state
     canShoot = true
     lastShotTime = 0
-    stroke.Color = Color3.fromRGB(255, 255, 255)
+    setButtonState(true)
 end
 
--- === Weapon & Combat Functions (unchanged) ===
+-- ===== Weapon & Combat Functions =====
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
@@ -166,15 +167,13 @@ local function hasClearLineOfSight(targetPlayer)
     local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
     local tRoot = tChar:FindFirstChild("HumanoidRootPart") or tChar:FindFirstChild("Torso")
     if not myRoot or not tRoot then return false end
-    local startPos = myRoot.Position
-    local endPos = tRoot.Position
-    local dir = (endPos - startPos).Unit
-    local dist = (endPos - startPos).Magnitude
+    local dir = (tRoot.Position - myRoot.Position).Unit
+    local dist = (tRoot.Position - myRoot.Position).Magnitude
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {char, tChar}
     params.IgnoreWater = true
-    return workspace:Raycast(startPos, dir * dist, params) == nil
+    return workspace:Raycast(myRoot.Position, dir * dist, params) == nil
 end
 
 local function getNearestVisibleEnemy()
@@ -182,19 +181,17 @@ local function getNearestVisibleEnemy()
     if not char then return nil end
     local myRoot = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso")
     if not myRoot then return nil end
+
     local nearest, minDist = nil, math.huge
     for _, other in pairs(Players:GetPlayers()) do
-        if other ~= player and other.Character then
+        if isValidTarget(other) then
             local oChar = other.Character
-            local hum = oChar:FindFirstChild("Humanoid")
-            if hum and hum.Health > 0 then
-                local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
-                if oRoot then
-                    local dist = (myRoot.Position - oRoot.Position).Magnitude
-                    if dist < minDist and hasClearLineOfSight(other) then
-                        minDist = dist
-                        nearest = other
-                    end
+            local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
+            if oRoot then
+                local dist = (myRoot.Position - oRoot.Position).Magnitude
+                if dist < minDist and hasClearLineOfSight(other) then
+                    minDist = dist
+                    nearest = other
                 end
             end
         end
@@ -212,53 +209,30 @@ local function shootEnemy(targetPlayer)
     if not handle then return false end
     local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
     if not tRoot then return false end
-    
+
     local startPos = handle.Position
     local hitPos = tRoot.Position
-    
+
     if localBeam then pcall(function() localBeam:Fire(handle, hitPos) end) end
-    
+
     local fireRemote = weapon:FindFirstChild("fire")
     if fireRemote then pcall(function() fireRemote:FireServer() end) end
-    
+
     local beamRemote = weapon:FindFirstChild("showBeam")
     if beamRemote then pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end) end
-    
+
     local killRemote = weapon:FindFirstChild("kill")
     if killRemote then
         local dir = (hitPos - startPos).Unit
         pcall(function() killRemote:FireServer(targetPlayer, dir) end)
     end
-    
+
     if killedRemote then pcall(function() killedRemote:FireServer(targetPlayer) end) end
-    
+
     return true
 end
 
-local function startCooldown()
-    canShoot = false
-    lastShotTime = tick()
-    -- Outline turns gray during cooldown
-    local stroke = Button:FindFirstChildOfClass("UIStroke")
-    if stroke then stroke.Color = Color3.fromRGB(150, 150, 150) end
-    
-    task.spawn(function()
-        while tick() - lastShotTime < cooldownTime do task.wait(0.1) end
-        canShoot = true
-        if stroke then stroke.Color = Color3.fromRGB(255, 255, 255) end
-    end)
-end
-
-function attemptShot()
-    if not canShoot then return end
-    if not getWeapon() then return end
-    local target = getNearestVisibleEnemy()
-    if target and shootEnemy(target) then
-        startCooldown()
-    end
-end
-
--- Respawn handling
+-- ===== Respawn Handling =====
 player.CharacterAdded:Connect(function()
     task.wait(0.1)
     createGUI()
@@ -272,4 +246,4 @@ else
     createGUI()
 end
 
-print("Aimbot Loaded – Rounded square, white outline, stable drag, position saved!")
+print("Aimbot loaded – Team check active (Blue vs Red)")
