@@ -1,5 +1,5 @@
--- One-Shot Aimbot for Duels: Murderers vs Sheriffs
--- Fixed right side, green/red tint, white outline, NO TEAMMATES
+-- One-Shot Aimbot with DEBUG MODE
+-- Fixed right side, green/red tint, white outline
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -9,14 +9,17 @@ local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 
+-- ===== DEBUG MODE =====
+local DEBUG = true  -- Set to false after fixing
+
 -- ===== Settings =====
 local cooldownTime = 2.5
 local lastShotTime = 0
 local canShoot = true
 
 -- Colors
-local readyColor = Color3.fromRGB(0, 255, 0)   -- Green
-local cooldownColor = Color3.fromRGB(255, 0, 0) -- Red
+local readyColor = Color3.fromRGB(0, 255, 0)
+local cooldownColor = Color3.fromRGB(255, 0, 0)
 
 -- ===== GUI =====
 local screenGui = nil
@@ -28,7 +31,6 @@ local camera = Workspace.CurrentCamera
 local localBeam = ReplicatedStorage:FindFirstChild("BindableEvents"):FindFirstChild("LocalBeam")
 local killedRemote = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killed")
 
--- Tween info
 local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 -- ===== Team Check =====
@@ -38,18 +40,20 @@ local function isValidTarget(otherPlayer)
     local hum = otherPlayer.Character:FindFirstChild("Humanoid")
     if not hum or hum.Health <= 0 then return false end
 
-    -- Check Game attribute (must be same game)
     local myGame = player:GetAttribute("Game")
     local theirGame = otherPlayer:GetAttribute("Game")
+    if DEBUG then print("My Game:", myGame, "Their Game:", theirGame) end
     if myGame and theirGame and myGame ~= theirGame then
+        if DEBUG then print("Different game, skipping") end
         return false
     end
 
-    -- Check Team attribute (must be different team)
     local myTeam = player:GetAttribute("Team")
     local theirTeam = otherPlayer:GetAttribute("Team")
+    if DEBUG then print("My Team:", myTeam, "Their Team:", theirTeam) end
     if myTeam and theirTeam and myTeam == theirTeam then
-        return false  -- Same team = teammate
+        if DEBUG then print("Same team, skipping") end
+        return false
     end
 
     return true
@@ -68,7 +72,6 @@ local function createGUI()
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screenGui.Parent = playerGui
 
-    -- Soft shadow (optional)
     local shadow = Instance.new("Frame")
     shadow.Name = "Shadow"
     shadow.Size = UDim2.new(0, 76, 0, 76)
@@ -81,72 +84,84 @@ local function createGUI()
     shadow.Parent = screenGui
     Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 16)
 
-    -- Main Button
     button = Instance.new("TextButton")
     button.Name = "ShootButton"
     button.Size = UDim2.new(0, 70, 0, 70)
     button.AnchorPoint = Vector2.new(1, 1)
     button.Position = UDim2.new(1, -23, 1, -183)
     button.BackgroundColor3 = readyColor
-    button.BackgroundTransparency = 0.85   -- See‑through
+    button.BackgroundTransparency = 0.85
     button.BorderSizePixel = 0
-    button.Text = ""                       -- No text
+    button.Text = ""
     button.AutoButtonColor = false
     button.ZIndex = 10
     button.Parent = screenGui
 
     Instance.new("UICorner", button).CornerRadius = UDim.new(0, 14)
 
-    -- White outline
     stroke = Instance.new("UIStroke", button)
     stroke.Color = Color3.fromRGB(255, 255, 255)
     stroke.Transparency = 0.0
     stroke.Thickness = 3.0
     stroke.LineJoinMode = Enum.LineJoinMode.Round
 
-    -- Update button color
     local function setButtonState(isReady)
         local targetColor = isReady and readyColor or cooldownColor
         local tween = TweenService:Create(button, tweenInfo, {BackgroundColor3 = targetColor})
         tween:Play()
     end
 
-    -- Shooting logic
     local function tryShoot()
-        if not canShoot then return end
-        if not getWeapon() then return end
+        if DEBUG then print("=== Try Shoot ===") end
+        if not canShoot then
+            if DEBUG then print("On cooldown") end
+            return
+        end
+
+        local weapon = getWeapon()
+        if not weapon then
+            if DEBUG then print("No weapon found") end
+            return
+        end
+        if DEBUG then print("Weapon:", weapon.Name) end
 
         local target = getNearestVisibleEnemy()
-        if target and shootEnemy(target) then
+        if not target then
+            if DEBUG then print("No valid target") end
+            return
+        end
+        if DEBUG then print("Target:", target.Name) end
+
+        if shootEnemy(target) then
             canShoot = false
             lastShotTime = tick()
-            setButtonState(false)  -- Red
-
+            setButtonState(false)
             task.spawn(function()
-                while tick() - lastShotTime < cooldownTime do
-                    task.wait(0.1)
-                end
+                while tick() - lastShotTime < cooldownTime do task.wait(0.1) end
                 canShoot = true
-                setButtonState(true)  -- Green
+                setButtonState(true)
             end)
+        else
+            if DEBUG then print("ShootEnemy returned false") end
         end
     end
 
     button.MouseButton1Click:Connect(tryShoot)
     button.TouchTap:Connect(tryShoot)
 
-    -- Ready state
     canShoot = true
     lastShotTime = 0
     setButtonState(true)
 end
 
--- ===== Weapon & Combat Functions =====
+-- ===== Weapon & Combat =====
 local function getWeapon()
     local char = player.Character
     if not char then return nil end
     for _, tool in pairs(char:GetChildren()) do
-        if tool:IsA("Tool") and tool:FindFirstChild("fire") then return tool end
+        if tool:IsA("Tool") and tool:FindFirstChild("fire") then
+            return tool
+        end
     end
     local bp = player:FindFirstChild("Backpack")
     if bp then
@@ -173,7 +188,9 @@ local function hasClearLineOfSight(targetPlayer)
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {char, tChar}
     params.IgnoreWater = true
-    return workspace:Raycast(myRoot.Position, dir * dist, params) == nil
+    local result = workspace:Raycast(myRoot.Position, dir * dist, params)
+    if DEBUG then print("Line of sight:", result == nil) end
+    return result == nil
 end
 
 local function getNearestVisibleEnemy()
@@ -189,6 +206,7 @@ local function getNearestVisibleEnemy()
             local oRoot = oChar:FindFirstChild("HumanoidRootPart") or oChar:FindFirstChild("Torso")
             if oRoot then
                 local dist = (myRoot.Position - oRoot.Position).Magnitude
+                if DEBUG then print("Checking", other.Name, "Dist:", dist) end
                 if dist < minDist and hasClearLineOfSight(other) then
                     minDist = dist
                     nearest = other
@@ -200,39 +218,61 @@ local function getNearestVisibleEnemy()
 end
 
 local function shootEnemy(targetPlayer)
-    if not targetPlayer or not targetPlayer.Character then return false end
+    if DEBUG then print("Shooting at", targetPlayer.Name) end
     local char = player.Character
     if not char then return false end
     local weapon = getWeapon()
     if not weapon then return false end
     local handle = weapon:FindFirstChild("Handle")
-    if not handle then return false end
+    if not handle then
+        if DEBUG then print("No Handle in weapon") end
+        return false
+    end
     local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart") or targetPlayer.Character:FindFirstChild("Torso")
     if not tRoot then return false end
 
     local startPos = handle.Position
     local hitPos = tRoot.Position
 
-    if localBeam then pcall(function() localBeam:Fire(handle, hitPos) end) end
+    if localBeam then
+        pcall(function() localBeam:Fire(handle, hitPos) end)
+        if DEBUG then print("LocalBeam fired") end
+    end
 
     local fireRemote = weapon:FindFirstChild("fire")
-    if fireRemote then pcall(function() fireRemote:FireServer() end) end
+    if fireRemote then
+        pcall(function() fireRemote:FireServer() end)
+        if DEBUG then print("fire remote fired") end
+    else
+        if DEBUG then print("No fire remote") end
+    end
 
     local beamRemote = weapon:FindFirstChild("showBeam")
-    if beamRemote then pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end) end
+    if beamRemote then
+        pcall(function() beamRemote:FireServer(hitPos, startPos, handle) end)
+        if DEBUG then print("showBeam remote fired") end
+    else
+        if DEBUG then print("No showBeam remote") end
+    end
 
     local killRemote = weapon:FindFirstChild("kill")
     if killRemote then
         local dir = (hitPos - startPos).Unit
         pcall(function() killRemote:FireServer(targetPlayer, dir) end)
+        if DEBUG then print("kill remote fired") end
+    else
+        if DEBUG then print("No kill remote") end
     end
 
-    if killedRemote then pcall(function() killedRemote:FireServer(targetPlayer) end) end
+    if killedRemote then
+        pcall(function() killedRemote:FireServer(targetPlayer) end)
+        if DEBUG then print("Killed remote fired") end
+    end
 
     return true
 end
 
--- ===== Respawn Handling =====
+-- ===== Respawn =====
 player.CharacterAdded:Connect(function()
     task.wait(0.1)
     createGUI()
@@ -246,4 +286,4 @@ else
     createGUI()
 end
 
-print("Aimbot loaded – Team check active (Blue vs Red)")
+print("DEBUG Aimbot loaded – Check console output")
